@@ -1,42 +1,66 @@
 name: Generate Release Notes
-
 on:
   push:
     tags:
       - "v*.*.*"
-
+  workflow_dispatch:
+    inputs:
+      from_tag:
+        description: 'Base tag to compare from (e.g., v1.2.1). Leave empty to use previous tag.'
+        required: false
+        type: string
+      to_tag:
+        description: 'Tag to compare to (e.g., v1.2.3). Leave empty to use latest tag.'
+        required: false
+        type: string
 permissions:
   contents: write
   id-token: write
   actions: write
   issues: write
-
 jobs:
   changelog:
     name: Generate changelog
     runs-on: ubuntu-latest
     outputs:
       release_body: ${{ steps.git-cliff.outputs.content }}
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-
-      - name: Generate changelog
+      - name: Generate changelog (default - latest)
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.from_tag == '' || github.event.inputs.to_tag == ''))
         uses: orhun/git-cliff-action@v4
-        id: git-cliff
+        id: git-cliff-default
         with:
           config: cliff.toml
           args: -vv --latest --strip header
         env:
           OUTPUT: CHANGES.md
           GITHUB_REPO: ${{ github.repository }}
-
+      - name: Generate changelog (custom tag range)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.from_tag != '' && github.event.inputs.to_tag != ''
+        uses: orhun/git-cliff-action@v4
+        id: git-cliff-custom
+        with:
+          config: cliff.toml
+          args: -vv --tag ${{ github.event.inputs.from_tag }}..${{ github.event.inputs.to_tag }} --strip header
+        env:
+          OUTPUT: CHANGES.md
+          GITHUB_REPO: ${{ github.repository }}
+      - name: Set release content
+        id: git-cliff
+        run: |
+          if [[ "${{ github.event_name }}" == "push" || ("${{ github.event_name }}" == "workflow_dispatch" && ("${{ github.event.inputs.from_tag }}" == "" || "${{ github.event.inputs.to_tag }}" == "")) ]]; then
+            echo "content=${{ steps.git-cliff-default.outputs.content }}" >> $GITHUB_OUTPUT
+          else
+            echo "content=${{ steps.git-cliff-custom.outputs.content }}" >> $GITHUB_OUTPUT
+          fi
       - name: Create Release Notes
         uses: softprops/action-gh-release@v1
         with:
           body: ${{ steps.git-cliff.outputs.content }}
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.to_tag != '' && github.event.inputs.to_tag || github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
