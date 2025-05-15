@@ -43,23 +43,12 @@ jobs:
           echo "❌ Error: Custom tag name is required when version_type is 'custom'"
           exit 1
           
-      - name: Create Custom Tag
+      - name: Create Custom Tag with GitHub Action
         if: inputs.version_type == 'custom'
-        run: |
-          # Check if tag already exists
-          trimmed_tag=$(echo "${{ inputs.custom_tag }}" | xargs)
-          if git tag | grep -q "^${trimmed_tag}$"; then
-            echo "❌ Error: Tag '${trimmed_tag}' already exists"
-            exit 1
-          fi
-          
-          # Create and push the custom tag
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git tag "${trimmed_tag}"
-          git push https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }} "${trimmed_tag}"
-          echo "✅ Custom tag '${trimmed_tag}' created successfully"
-          echo "new_tag=${trimmed_tag}" >> $GITHUB_OUTPUT
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          custom_tag: ${{ inputs.custom_tag }}
+          github_token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           
       - name: Bump Version and Push Tag
         id: tag_version
