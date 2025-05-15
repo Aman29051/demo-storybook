@@ -1,8 +1,12 @@
 name: Generate Release Notes
 on:
+  workflow_run:
+    workflows: ["Create Tag"]
+    types:
+      - completed
   push:
     tags:
-      - "v*.*.*"
+      - "v*"
   workflow_dispatch:
     inputs:
       from_tag:
