@@ -1,0 +1,83 @@
+name: Create Tag
+on:
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: "Version increment type"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+          - custom
+        default: "patch"
+      custom_tag:
+        description: "Custom tag name (only used when version_type is 'custom')"
+        required: false
+        type: string
+        default: ""
+      commit_id:
+        description: "Specific commit ID (optional)"
+        required: false
+        type: string
+        default: ""
+permissions:
+  contents: write
+jobs:
+  create_tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          
+      - name: Checkout Specific Commit
+        if: inputs.commit_id != ''
+        run: git checkout ${{ inputs.commit_id }}
+        
+      - name: Validate Custom Tag Input
+        if: inputs.version_type == 'custom' && inputs.custom_tag == ''
+        run: |
+          echo "❌ Error: Custom tag name is required when version_type is 'custom'"
+          exit 1
+          
+      - name: Create Custom Tag
+        if: inputs.version_type == 'custom'
+        run: |
+          # Check if tag already exists
+          trimmed_tag=$(echo "${{ inputs.custom_tag }}" | xargs)
+          if git tag | grep -q "^${trimmed_tag}$"; then
+            echo "❌ Error: Tag '${trimmed_tag}' already exists"
+            exit 1
+          fi
+          
+          # Create and push the custom tag
+          git tag "${trimmed_tag}"
+          git push origin "${trimmed_tag}"
+          echo "✅ Custom tag '${trimmed_tag}' created successfully"
+          echo "new_tag=${trimmed_tag}" >> $GITHUB_OUTPUT
+          
+      - name: Bump Version and Push Tag
+        id: tag_version
+        if: inputs.version_type != 'custom'
+        uses: anothrNick/github-tag-action@1.64.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DEFAULT_BUMP: ${{ inputs.version_type }}
+          WITH_V: true
+          PRERELEASE: false
+          RELEASE_BRANCHES: ".*"
+          BRANCH_IGNORE: ""
+        continue-on-error: true
+          
+      - name: Tag Creation Status
+        if: inputs.version_type != 'custom'
+        run: |
+          if [ "${{ steps.tag_version.outcome }}" == "success" ]; then
+            echo "✅ New tag ${{ steps.tag_version.outputs.new_tag }} created successfully."
+          else
+            echo "❌ Failed to create tag. Ensure the tag doesn't exist and follows increment rules."
+            exit 1
+          fi
