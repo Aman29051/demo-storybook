@@ -46,7 +46,7 @@ jobs:
       - name: Create Custom Tag with GitHub Action
         if: inputs.version_type == 'custom'
         uses: anothrNick/github-tag-action@1.64.0
-        with:
+        env:
           CUSTOM_TAG: ${{ inputs.custom_tag }}
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           WITH_V: false
