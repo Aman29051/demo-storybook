@@ -54,8 +54,10 @@ jobs:
           fi
           
           # Create and push the custom tag
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
           git tag "${trimmed_tag}"
-          git push origin "${trimmed_tag}"
+          git push https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }} "${trimmed_tag}"
           echo "✅ Custom tag '${trimmed_tag}' created successfully"
           echo "new_tag=${trimmed_tag}" >> $GITHUB_OUTPUT
           
@@ -64,7 +66,7 @@ jobs:
         if: inputs.version_type != 'custom'
         uses: anothrNick/github-tag-action@1.64.0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           DEFAULT_BUMP: ${{ inputs.version_type }}
           WITH_V: true
           PRERELEASE: false
