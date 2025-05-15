@@ -62,7 +62,7 @@ jobs:
         id: git-cliff-custom
         with:
           config: cliff.toml
-          args: -vv ${{ steps.set-tags.outputs.from_tag }}..${{ steps.set-tags.outputs.to_tag }} --strip header
+          args: -vv ${{ steps.set-tags.outputs.from_tag }}^..${{ steps.set-tags.outputs.to_tag }} --strip header
         env:
           OUTPUT: CHANGES.md
           GITHUB_REPO: ${{ github.repository }}
