@@ -58,14 +58,28 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
       - name: Generate changelog (custom tag range)
         if: steps.changelog-mode.outputs.mode == 'custom'
-        uses: orhun/git-cliff-action@v4
         id: git-cliff-custom
-        with:
-          config: cliff.toml
-          args: -vv ${{ steps.set-tags.outputs.from_tag }}^..${{ steps.set-tags.outputs.to_tag }} --strip header
+        run: |
+          echo "Generating changelog for range: ${{ steps.changelog-mode.outputs.from_tag }}..${{ steps.changelog-mode.outputs.to_tag }}"
+          git cliff ${{ steps.set-tags.outputs.from_tag }}^..${{ steps.set-tags.outputs.to_tag }} \
+            --config cliff.toml \
+            --strip header \
+            --output CHANGES.md
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          cat CHANGES.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
         env:
-          OUTPUT: CHANGES.md
-          GITHUB_REPO: ${{ github.repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+      # - name: Generate changelog (custom tag range)
+      #   if: steps.changelog-mode.outputs.mode == 'custom'
+      #   uses: orhun/git-cliff-action@v4
+      #   id: git-cliff-custom
+      #   with:
+      #     config: cliff.toml
+      #     args: -vv ${{ steps.set-tags.outputs.from_tag }}^..${{ steps.set-tags.outputs.to_tag }} --strip header
+      #   env:
+      #     OUTPUT: CHANGES.md
+      #     GITHUB_REPO: ${{ github.repository }}
       - name: Create Release Notes
         uses: softprops/action-gh-release@v1
         with:
