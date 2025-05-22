@@ -61,6 +61,12 @@ jobs:
           OUTPUT: CHANGELOG.md
           GITHUB_REPO: ${{ github.repository }}
 
+      - name: Commit generated changelog
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+
       - name: Create Pull Request with updated CHANGELOG.md
         uses: peter-evans/create-pull-request@v6
         with:
