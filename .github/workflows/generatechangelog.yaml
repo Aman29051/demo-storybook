@@ -83,7 +83,10 @@ jobs:
           """
           trim = true
           render_always = true
-          postprocessors = []
+          postprocessors = [
+              { pattern = '([A-Z]+-[0-9]+)', replace = "[$1](https://worth-ai.atlassian.net/browse/$1)" },
+              { pattern = '\(#([0-9]+)\)', replace = "([#$1](https://github.com/${{ github.repository }}/pull/$1))" }
+          ]
 
           [git]
           conventional_commits = false
@@ -120,7 +123,7 @@ jobs:
           sort_commits = "oldest"
           recurse_submodules = false
           EOF
-
+          
       - name: Generate changelog
         uses: orhun/git-cliff-action@v4
         id: git-cliff
