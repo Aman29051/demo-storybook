@@ -61,11 +61,26 @@ jobs:
           OUTPUT: CHANGELOG.md
           GITHUB_REPO: ${{ github.repository }}
 
-      - name: Commit generated changelog
+      - name: Commit, push changelog, and create PR
         run: |
+          TARGET_BRANCH="chore/update-changelog-${{ env.CURRENT_TAG }}"
+          echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
+
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "$TARGET_BRANCH"
           git add CHANGELOG.md
+          git commit -m "chore: update CHANGELOG for ${{ env.CURRENT_TAG }}" || echo "No changes to commit"
+          git push origin "$TARGET_BRANCH"
+
+          echo "${{ secrets.PERSONAL_ACCESS_TOKEN }}" > token.txt
+          gh auth login --with-token < token.txt
+          gh pr create \
+            --body "This PR generates the `CHANGELOG.md` file to reflect changes from `${{ env.PREV_TAG }}` to `${{ env.CURRENT_TAG }}`." \
+            --title "#NO_JIRA: #LIVE Generate  CHANGELOG for ${{ env.CURRENT_TAG }}" \
+            --head "$TARGET_BRANCH" \
+            --base "main"
 
       - name: Create Pull Request with updated CHANGELOG.md
         uses: peter-evans/create-pull-request@v6
