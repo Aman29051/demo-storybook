@@ -4,6 +4,10 @@ on:
   repository_dispatch:
     types: [kustomization_changed]
 
+permissions:
+  contents: write
+  pull-requests: write
+  
 env:
   SERVICE_NAME: "demo-storybook"
   DEPLOY_REPO_OWNER: "Aman29051"
