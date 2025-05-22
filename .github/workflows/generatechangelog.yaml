@@ -34,27 +34,19 @@ jobs:
           
           # Get current tag from kustomization.yaml
           CURRENT_TAG=$(yq eval '.images[0].newTag' "${{ env.KUSTOMIZATION_PATH }}")
-          echo "Current tag: $CURRENT_TAG"
           echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
           
-          echo "### Current ${{ env.KUSTOMIZATION_PATH }}: "
-          cat "${{ env.KUSTOMIZATION_PATH }}"
-          
           # Get previous commit hash
-          PREV_COMMIT=$(git log --oneline -n 2 --pretty=format:"%H" | tail -n 1)
+          PREV_COMMIT=$(git log --pretty=format:"%H" -n 1 HEAD~1)
           echo "Previous commit: $PREV_COMMIT"
           
           # Get previous tag from kustomization.yaml at previous commit
           PREV_TAG=$(git show $PREV_COMMIT:${{ env.KUSTOMIZATION_PATH }} | yq eval '.images[0].newTag' -)
-          echo "Previous tag: $PREV_TAG"
           echo "PREV_TAG=$PREV_TAG" >> $GITHUB_ENV
-          
-          # Print both tags for comparison
-          echo "=== TAG COMPARISON ==="
+
           echo "Previous commit tag: $PREV_TAG"
           echo "Current commit tag:  $CURRENT_TAG"
-          echo "===================="
-
+          
       - name: Extract version tags
         id: tags
         run: |
