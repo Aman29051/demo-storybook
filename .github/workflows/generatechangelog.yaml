@@ -9,7 +9,6 @@ env:
   DEPLOY_REPO_OWNER: "Aman29051"
   DEPLOY_REPO_NAME: "nodeapp"
   KUSTOMIZATION_PATH: "prod/kustomization.yaml"
-  CONTAINER_REGISTRY: "808338307022.dkr.ecr.us-east-1.amazonaws.com"
   JIRA_BASE_URL: "https://worth-ai.atlassian.net/browse"
 
 jobs:
@@ -38,7 +37,6 @@ jobs:
           
           # Get previous commit hash
           PREV_COMMIT=$(git log --pretty=format:"%H" -n 1 HEAD~1)
-          echo "Previous commit: $PREV_COMMIT"
           
           # Get previous tag from kustomization.yaml at previous commit
           PREV_TAG=$(git show $PREV_COMMIT:${{ env.KUSTOMIZATION_PATH }} | yq eval '.images[0].newTag' -)
