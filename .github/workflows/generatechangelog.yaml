@@ -12,7 +12,6 @@ env:
   DEPLOY_REPO_OWNER: "Aman29051"
   DEPLOY_REPO_NAME: "nodeapp"
   KUSTOMIZATION_PATH: "prod/kustomization.yaml"
-  JIRA_BASE_URL: "https://worth-ai.atlassian.net/browse"
 
 jobs:
   generate-changelog:
