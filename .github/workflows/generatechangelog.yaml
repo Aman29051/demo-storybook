@@ -3,6 +3,18 @@ name: Generate Changelog & Draft Release
 on:
   repository_dispatch:
     types: [kustomization_changed]
+  workflow_dispatch:
+    inputs:
+      prev_tag:
+        description: 'Previous Tag'
+        required: true
+        type: string
+        default: ''
+      latest_tag:
+        description: 'Latest Tag'
+        required: true
+        type: string
+        default: ''
 
 permissions:
   contents: write
@@ -29,6 +41,59 @@ jobs:
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           path: deploy-repo
           fetch-depth: 0
+
+      - name: Extract current and previous tags
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual dispatch - use provided inputs
+            PREV_TAG="${{ github.event.inputs.prev_tag }}"
+            CURRENT_TAG="${{ github.event.inputs.latest_tag }}"
+            
+            echo "Using manual dispatch inputs:"
+            echo "Previous tag: $PREV_TAG"
+            echo "Current tag:  $CURRENT_TAG"
+          else
+            # Repository dispatch - extract from kustomization.yaml
+            cd deploy-repo
+            
+            # Get current tag from kustomization.yaml
+            CURRENT_TAG=$(yq eval '.images[0].newTag' "${{ env.KUSTOMIZATION_PATH }}")
+            
+            # Get previous commit hash
+            PREV_COMMIT=$(git log --pretty=format:"%H" -n 1 HEAD~1)
+            
+            # Get previous tag from kustomization.yaml at previous commit
+            PREV_TAG=$(git show $PREV_COMMIT:${{ env.KUSTOMIZATION_PATH }} | yq eval '.images[0].newTag' -)
+
+            # Extract values before the underscore
+            CURRENT_TAG=$(echo "$CURRENT_TAG" | cut -d'_' -f1)
+            PREV_TAG=$(echo "$PREV_TAG" | cut -d'_' -f1)
+            
+            echo "Using repository dispatch (kustomization.yaml):"
+            echo "Previous tag: $PREV_TAG"
+            echo "Current tag:  $CURRENT_TAG"
+            
+            cd ..
+          fi
+      
+          echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
+          echo "PREV_TAG=$PREV_TAG" >> $GITHUB_ENV
+
+      - name: Validate tags
+        run: |
+          if [[ -z "${{ env.PREV_TAG }}" ]] || [[ -z "${{ env.CURRENT_TAG }}" ]]; then
+            echo "Error: Both previous and current tags must be provided"
+            exit 1
+          fi
+          
+          if [[ "${{ env.PREV_TAG }}" == "${{ env.CURRENT_TAG }}" ]]; then
+            echo "Error: Previous and current tags cannot be the same"
+            exit 1
+          fi
+          
+          echo "Tags validated successfully"
+          echo "Previous tag: ${{ env.PREV_TAG }}"
+          echo "Current tag: ${{ env.CURRENT_TAG }}"
 
       - name: Extract current and previous tags
         run: |
