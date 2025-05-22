@@ -27,6 +27,7 @@ jobs:
           repository: ${{ env.DEPLOY_REPO_OWNER }}/${{ env.DEPLOY_REPO_NAME }}
           token: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
           path: deploy-repo
+          fetch-depth: 0
 
       - name: Extract current and previous tags
         run: |
