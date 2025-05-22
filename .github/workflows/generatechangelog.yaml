@@ -35,7 +35,6 @@ jobs:
           
           # Get current tag from kustomization.yaml
           CURRENT_TAG=$(yq eval '.images[0].newTag' "${{ env.KUSTOMIZATION_PATH }}")
-          echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
           
           # Get previous commit hash
           PREV_COMMIT=$(git log --pretty=format:"%H" -n 1 HEAD~1)
@@ -43,34 +42,16 @@ jobs:
           
           # Get previous tag from kustomization.yaml at previous commit
           PREV_TAG=$(git show $PREV_COMMIT:${{ env.KUSTOMIZATION_PATH }} | yq eval '.images[0].newTag' -)
-          echo "PREV_TAG=$PREV_TAG" >> $GITHUB_ENV
 
-          echo "Previous commit tag: $PREV_TAG"
-          echo "Current commit tag:  $CURRENT_TAG"
-          
-      - name: Extract version tags
-        id: tags
-        run: |
-          # Extract current tag
-          CURRENT_TAG=$(grep -A 1 "name: ${{ env.CONTAINER_REGISTRY }}/${{ env.SERVICE_NAME }}" deploy-repo/${{ env.KUSTOMIZATION_PATH }} | grep "newTag:" | sed 's/.*newTag: //' | tr -d ' ' | cut -d'_' -f1)
-          
-          # Extract previous tag
-          cd deploy-repo
-          PREV_COMMIT=$(git log -2 --format="%H" -- ${{ env.KUSTOMIZATION_PATH }} | tail -1)
-          PREV_TAG=$(git show $PREV_COMMIT:${{ env.KUSTOMIZATION_PATH }} 2>/dev/null | grep -A 1 "name: ${{ env.CONTAINER_REGISTRY }}/${{ env.SERVICE_NAME }}" | grep "newTag:" | sed 's/.*newTag: //' | tr -d ' ' | cut -d'_' -f1 2>/dev/null || echo "")
-          cd ..
-
-          echo "current=$CURRENT_TAG"
-          echo "previous=$PREV_TAG"
-          
-          echo "current=$CURRENT_TAG" >> $GITHUB_OUTPUT
-          echo "previous=$PREV_TAG" >> $GITHUB_OUTPUT
-          
-          if [ -z "$PREV_TAG" ] || [ "$PREV_TAG" == "$CURRENT_TAG" ]; then
-            echo "generate=false" >> $GITHUB_OUTPUT
-          else
-            echo "generate=true" >> $GITHUB_OUTPUT
-          fi
+          # Extract values before the underscore
+          CURRENT_TAG_CLEAN=$(echo "$CURRENT_TAG" | cut -d'_' -f1)
+          PREV_TAG_CLEAN=$(echo "$PREV_TAG" | cut -d'_' -f1)
+      
+          echo "CURRENT_TAG=$CURRENT_TAG_CLEAN" >> $GITHUB_ENV
+          echo "PREV_TAG=$PREV_TAG_CLEAN" >> $GITHUB_ENV
+      
+          echo "Previous tag: $PREV_TAG_CLEAN"
+          echo "Current tag:  $CURRENT_TAG_CLEAN"
 
       - name: Generate changelog
         if: steps.tags.outputs.generate == 'true'
