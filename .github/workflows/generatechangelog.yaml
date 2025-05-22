@@ -57,13 +57,22 @@ jobs:
 
       - name: Generate changelog
         uses: orhun/git-cliff-action@v4
-        id: git-cliff-custom
+        id: git-cliff
         with:
           config: cliff.toml
           args: -vv --tag ${{ env.PREV_TAG }}..${{ env.CURRENT_TAG }} --strip header
         env:
           OUTPUT: CHANGELOG.md
           GITHUB_REPO: ${{ github.repository }}
+
+      - name: Create Release Notes
+        uses: softprops/action-gh-release@v1
+        with:
+          body: ${{ steps.git-cliff.outputs.content }}
+          tag_name: ${{ env.CURRENT_TAG }}
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
       - name: Commit, push changelog, and create PR
         run: |
