@@ -65,17 +65,15 @@ jobs:
         run: |
           TARGET_BRANCH="chore/update-changelog-${{ env.CURRENT_TAG }}"
           echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          echo "${{ secrets.PERSONAL_ACCESS_TOKEN }}" > token.txt
+          gh auth login --with-token < token.txt
 
           git checkout -b "$TARGET_BRANCH"
           git add CHANGELOG.md
           git commit -m "chore: update CHANGELOG for ${{ env.CURRENT_TAG }}" || echo "No changes to commit"
-          git push https://x-access-token:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/${{ github.repository }} "$TARGET_BRANCH"
+          git push origin "$TARGET_BRANCH"
 
-          echo "${{ secrets.PERSONAL_ACCESS_TOKEN }}" > token.txt
-          gh auth login --with-token < token.txt
           gh pr create \
             --body "This PR generates the `CHANGELOG.md` file to reflect changes from `${{ env.PREV_TAG }}` to `${{ env.CURRENT_TAG }}`." \
             --title "#NO_JIRA: #LIVE Generate  CHANGELOG for ${{ env.CURRENT_TAG }}" \
