@@ -16,7 +16,8 @@ jobs:
 
       - name: Clone nodeapp repo
         run: |
-          git clone https://github.com/Aman29051/nodeapp.git
+          # git clone https://github.com/Aman29051/nodeapp.git
+          git clone https://Aman29051:${{ secrets.PERSONAL_ACCESS_TOKEN }}@github.com/Aman29051/nodeapp.git
           cat nodeapp/prod/kustomization.yaml > kustomization.yaml
 
       - name: Extract latest tag
