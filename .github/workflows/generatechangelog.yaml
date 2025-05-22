@@ -132,11 +132,13 @@ jobs:
           GITHUB_REPO: ${{ github.repository }}
 
       - name: Create Release Notes
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           body: ${{ steps.git-cliff.outputs.content }}
           tag_name: ${{ env.CURRENT_TAG }}
           draft: true
+          prerelease: false
+          make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
