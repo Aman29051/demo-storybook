@@ -25,18 +25,20 @@ jobs:
         run: |
           latest_line=$(grep 'newTag:' kustomization.yaml | grep 'auth-service:' | head -1)
           latest_tag=$(echo "$latest_line" | awk -F ':' '{print $2}' | awk -F '_' '{print $1}' | xargs)
+          echo "latest_tag=$latest_tag"
           echo "latest_tag=$latest_tag" >> $GITHUB_OUTPUT
 
           # Get previous commit's tag value for comparison
           git -C nodeapp log -p -1 -- prod/kustomization.yaml > last_diff.txt
           prev_tag=$(grep '+  - name: .*auth-service' last_diff.txt | grep 'newTag:' | awk -F ':' '{print $3}' | awk -F '_' '{print $1}' | tail -1 | xargs)
+          echo "prev_tag=$prev_tag"
           echo "prev_tag=$prev_tag" >> $GITHUB_OUTPUT
 
       - name: Generate changelog between tags
         id: changelog
         run: |
           git fetch --tags
-          logs=$(git log ${{ steps.extract.outputs.prev_tag }}..${{ steps.extract.outputs.latest_tag }} --pretty=format:"%s")
+          logs=$(git log --pretty=format:"%s" ${{ steps.extract.outputs.prev_tag }}..${{ steps.extract.outputs.latest_tag }})
           echo "$logs" > raw_changelog.txt
 
           # Create formatted changelog
