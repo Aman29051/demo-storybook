@@ -122,27 +122,50 @@ jobs:
           sort_commits = "oldest"
           recurse_submodules = false
           EOF
-          
-      - name: Generate changelog
-        uses: orhun/git-cliff-action@v4
-        id: git-cliff
-        with:
-          config: cliff.toml
-          args: -vv --tag ${{ env.PREV_TAG }}..${{ env.CURRENT_TAG }} --strip header
-        env:
-          OUTPUT: CHANGELOG.md
-          GITHUB_REPO: ${{ github.repository }}
 
-      - name: Create Release Notes
+      - name: Generate changelog between tags
+        run: |
+          npx git-cliff@latest ${{ env.PREV_TAG }}..${{ env.CURRENT_TAG }} --output CHANGELOG.md   
+          echo "Changelog generated successfully!"
+      
+      - name: Read changelog content
+        id: changelog
+        run: |
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          cat CHANGELOG.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Draft Release Notes
         uses: softprops/action-gh-release@v2
         with:
-          body: ${{ steps.git-cliff.outputs.content }}
+          body: ${{ steps.changelog.outputs.content }}
           tag_name: ${{ env.CURRENT_TAG }}
           draft: true
           prerelease: false
           make_latest: false
         env:
           GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+          
+      # - name: Generate changelog
+      #   uses: orhun/git-cliff-action@v4
+      #   id: git-cliff
+      #   with:
+      #     config: cliff.toml
+      #     args: -vv --tag ${{ env.PREV_TAG }}..${{ env.CURRENT_TAG }} --strip header
+      #   env:
+      #     OUTPUT: CHANGELOG.md
+      #     GITHUB_REPO: ${{ github.repository }}
+
+      # - name: Create Release Notes
+      #   uses: softprops/action-gh-release@v2
+      #   with:
+      #     body: ${{ steps.git-cliff.outputs.content }}
+      #     tag_name: ${{ env.CURRENT_TAG }}
+      #     draft: true
+      #     prerelease: false
+      #     make_latest: false
+      #   env:
+      #     GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
 
       - name: Commit, push changelog, and create PR
         run: |
