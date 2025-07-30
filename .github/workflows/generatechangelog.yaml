@@ -95,37 +95,10 @@ jobs:
           echo "Previous tag: ${{ env.PREV_TAG }}"
           echo "Current tag: ${{ env.CURRENT_TAG }}"
 
-      - name: Extract current and previous tags
-        run: |
-          cd deploy-repo
-          
-          # Get current tag from kustomization.yaml
-          CURRENT_TAG=$(yq eval '.images[0].newTag' "${{ env.KUSTOMIZATION_PATH }}")
-          
-          # Get previous commit hash
-          PREV_COMMIT=$(git log --pretty=format:"%H" -n 1 HEAD~1)
-          
-          # Get previous tag from kustomization.yaml at previous commit
-          PREV_TAG=$(git show $PREV_COMMIT:${{ env.KUSTOMIZATION_PATH }} | yq eval '.images[0].newTag' -)
-
-          # Extract values before the underscore
-          CURRENT_TAG_CLEAN=$(echo "$CURRENT_TAG" | cut -d'_' -f1)
-          PREV_TAG_CLEAN=$(echo "$PREV_TAG" | cut -d'_' -f1)
-      
-          echo "CURRENT_TAG=$CURRENT_TAG_CLEAN" >> $GITHUB_ENV
-          echo "PREV_TAG=$PREV_TAG_CLEAN" >> $GITHUB_ENV
-      
-          echo "Previous tag: $PREV_TAG_CLEAN"
-          echo "Current tag:  $CURRENT_TAG_CLEAN"
-
       - name: Create cliff.toml config
         run: |
           cat > cliff.toml << 'EOF'
           [changelog]
-          header = """
-          # Changelog\n
-          All notable changes to this project will be documented in this file.\n
-          """
           body = """
           {% if version %}\
               ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
@@ -156,7 +129,9 @@ jobs:
           filter_unconventional = false
           require_conventional = false
           split_commits = false
-          commit_preprocessors = []
+          commit_preprocessors = [
+              { pattern = "Co-authored-by:.*", replace = "" }
+          ]
           protect_breaking_commits = false
           commit_parsers = [
               { message = "^feat", group = "<!-- 0 -->🚀 Features" },
@@ -186,7 +161,6 @@ jobs:
           sort_commits = "oldest"
           recurse_submodules = false
           EOF
-
       # - name: Generate changelog
       #   run: |
       #     # Generate new changelog content to temporary file
