@@ -199,24 +199,25 @@ jobs:
           # Function to get emoji based on commit tags
           get_commit_emoji() {
               local commit_message="$1"
-              
-              # Check for priority tags first
-              if [[ "$commit_message" == *"#HOTFIX"* ]]; then
-                  echo "🔥"  # Fire for hotfix
-              elif [[ "$commit_message" == *"#FAST"* ]]; then
-                  echo "⚡"  # Lightning for fast
-              elif [[ "$commit_message" == *"#REGULAR"* ]]; then
-                  echo "📦"  # Wrench for regular
-              # Check for environment tags
-              elif [[ "$commit_message" == *"#LIVE"* ]]; then
-                  echo "🚀"  # Rocket for live
-              elif [[ "$commit_message" == *"#FLAG"* ]]; then
-                  echo "🚩"  # Target for flag
-              else
-                  echo "📝"  # Note for general commits
-              fi
-          }
+              local emojis=""
           
+              # Priority tags
+              [[ "$commit_message" == *"#HOTFIX"* ]] && emojis+="🔥"
+              [[ "$commit_message" == *"#FAST"* ]] && emojis+="⚡"
+              [[ "$commit_message" == *"#REGULAR"* ]] && emojis+="🚜"
+          
+              # Environment tags
+              [[ "$commit_message" == *"#LIVE"* ]] && emojis+="🚀"
+              [[ "$commit_message" == *"#FLAG"* ]] && emojis+="🚩"
+          
+              # Default emoji if no tags matched
+              if [[ -z "$emojis" ]]; then
+                  emojis="📝"
+              fi
+          
+              echo "$emojis"
+          }
+
           get_jira_type_icon() {
               local jira_type="$1"
           
@@ -297,9 +298,7 @@ jobs:
           
                       # Cache or fetch Jira type
                       if [[ -z "${jira_cache[$jira_id]}" ]]; then
-                          echo -e "${YELLOW}Fetching JIRA type for $jira_id...${NC}" >&2
                           jira_type_raw=$(get_jira_type "$jira_id" 2>/dev/null)
-                          echo -e "${YELLOW}JIRA type response for $jira_id: '$jira_type_raw'${NC}" >&2
                           if [[ -z "$jira_type_raw" || "$jira_type_raw" == *"error"* || "$jira_type_raw" == "null" ]]; then
                               jira_cache["$jira_id"]="Other"
                           else
