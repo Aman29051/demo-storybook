@@ -76,12 +76,20 @@ jobs:
           fi
 
       - name: Create GitHub Deployment
-        uses: peter-evans/create-deployment@v3
+        uses: peter-evans/create-deployment@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           environment: production
           auto_merge: false
           transient_environment: false
           production_environment: true
-          description: Production deployment
+          description: Production deployment from tag
+      
+      - name: Mark Deployment as Success
+        uses: peter-evans/create-deployment-status@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          environment: production
+          state: success
+
          
