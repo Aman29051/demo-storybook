@@ -1,75 +1,529 @@
-name: Generate Release Notes
+name: Generate Changelog & Draft Release
+
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
     inputs:
-      from_tag:
-        description: 'Base tag to compare from (e.g., v1.2.1). Leave empty to use previous tag.'
-        required: false
+      prev_tag:
+        description: 'Previous Tag'
+        required: true
         type: string
-      to_tag:
-        description: 'Tag to compare to (e.g., v1.2.3). Leave empty to use latest tag.'
-        required: false
+        default: ''
+      latest_tag:
+        description: 'Latest Tag'
+        required: true
         type: string
+        default: ''
+  deployment_status:
+    types: [success]
+
 permissions:
   contents: write
-  id-token: write
-  actions: write
-  issues: write
+  pull-requests: write
+  deployments: read
+
 jobs:
-  changelog:
-    name: Generate changelog
+  generate-changelog:
     runs-on: ubuntu-latest
-    outputs:
-      release_body: ${{ steps.git-cliff.outputs.content }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'deployment_status' && github.event.deployment.environment == 'production') }}
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Determine changelog mode and trim inputs
-        id: changelog-mode
+
+      - name: Extract current and previous tags
         run: |
-          # Trim whitespace from inputs
-          FROM_TAG="${{ github.event.inputs.from_tag || '' }}"
-          TO_TAG="${{ github.event.inputs.to_tag || '' }}"
-          FROM_TAG=$(echo "$FROM_TAG" | xargs)
-          TO_TAG=$(echo "$TO_TAG" | xargs)
-          
-          echo "from_tag=$FROM_TAG" >> $GITHUB_OUTPUT
-          echo "to_tag=$TO_TAG" >> $GITHUB_OUTPUT
-          
-          if [[ "${{ github.event_name }}" == "push" || "$FROM_TAG" == "" || "$TO_TAG" == "" ]]; then
-            echo "mode=default" >> $GITHUB_OUTPUT
-          else
-            echo "mode=custom" >> $GITHUB_OUTPUT
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual dispatch - use provided inputs
+            PREV_TAG="${{ github.event.inputs.prev_tag }}"
+            CURRENT_TAG="${{ github.event.inputs.latest_tag }}"
+            
+            echo "Using manual dispatch inputs:"
+            echo "Previous tag: $PREV_TAG"
+            echo "Current tag:  $CURRENT_TAG"
+          elif [[ "${{ github.event_name }}" == "deployment_status" ]]; then
+            # Deployment trigger - automatically determine tags
+            echo "Triggered by successful production deployment"
+            
+            # Get the current tag from the deployment (assuming it's tagged)
+            CURRENT_TAG=$(git describe --tags --exact-match "${{ github.event.deployment.sha }}" 2>/dev/null || echo "")
+            
+            if [[ -z "$CURRENT_TAG" ]]; then
+              # If no exact tag match, try to find the most recent tag
+              CURRENT_TAG=$(git describe --tags --abbrev=0 "${{ github.event.deployment.sha }}" 2>/dev/null || echo "")
+            fi
+            
+            if [[ -z "$CURRENT_TAG" ]]; then
+              echo "Warning: Could not determine current tag from deployment SHA: ${{ github.event.deployment.sha }}"
+              echo "Deployment ref: ${{ github.event.deployment.ref }}"
+              # Try using the deployment ref if it looks like a tag
+              if [[ "${{ github.event.deployment.ref }}" =~ ^refs/tags/.* ]]; then
+                CURRENT_TAG="${{ github.event.deployment.ref }}"
+                CURRENT_TAG="${CURRENT_TAG#refs/tags/}"
+              else
+                echo "Error: Cannot determine tag for changelog generation"
+                exit 1
+              fi
+            fi
+            
+            # Get the previous tag
+            PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || echo "")
+            
+            if [[ -z "$PREV_TAG" ]]; then
+              echo "Warning: Could not determine previous tag, using first commit"
+              PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+            fi
+            
+            echo "Automatically determined tags:"
+            echo "Previous tag: $PREV_TAG"
+            echo "Current tag:  $CURRENT_TAG"
           fi
-      - name: Generate changelog (default - latest)
-        if: steps.changelog-mode.outputs.mode == 'default'
-        uses: orhun/git-cliff-action@v4
-        id: git-cliff-default
-        with:
-          config: cliff.toml
-          args: -vv --latest --strip header
+      
+          echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
+          echo "PREV_TAG=$PREV_TAG" >> $GITHUB_ENV
+
+      - name: Validate tags
+        run: |
+          if [[ -z "${{ env.PREV_TAG }}" ]] || [[ -z "${{ env.CURRENT_TAG }}" ]]; then
+            echo "Error: Both previous and current tags must be provided"
+            exit 1
+          fi
+          
+          if [[ "${{ env.PREV_TAG }}" == "${{ env.CURRENT_TAG }}" ]]; then
+            echo "Error: Previous and current tags cannot be the same"
+            exit 1
+          fi
+          
+          echo "Tags validated successfully"
+          echo "Previous tag: ${{ env.PREV_TAG }}"
+          echo "Current tag: ${{ env.CURRENT_TAG }}"
+
+      - name: Create cliff.toml config
+        run: |
+          cat > cliff.toml << 'EOF'
+          [changelog]
+          body = """
+          {% if version %}\
+              ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+          {% else %}\
+              ## [unreleased]
+          {% endif %}\
+          {% for group, commits in commits | group_by(attribute="group") %}
+              ### {{ group | striptags | trim | upper_first }}
+              {% for commit in commits %}
+                  - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+                      {% if commit.breaking %}[**breaking**] {% endif %}\
+                      {{ commit.message | upper_first }}\
+              {% endfor %}
+          {% endfor %}\n
+          """
+          footer = """
+          <!-- generated by git-cliff -->
+          """
+          trim = true
+          render_always = true
+          postprocessors = [
+              { pattern = '([A-Z]+-[0-9]+)', replace = "[$1](https://worth-ai.atlassian.net/browse/$1)" },
+              { pattern = '\(#([0-9]+)\)', replace = "([#$1](https://github.com/${{ github.repository }}/pull/$1))" }
+          ]
+
+          [git]
+          conventional_commits = false
+          filter_unconventional = false
+          require_conventional = false
+          split_commits = false
+          commit_preprocessors = [
+              { pattern = "Co-authored-by:.*", replace = "" }
+          ]
+          protect_breaking_commits = false
+          commit_parsers = [
+              { message = "^feat", group = "<!-- 0 -->🚀 Features" },
+              { message = "^fix", group = "<!-- 1 -->🐛 Bug Fixes" },
+              { message = "^doc", group = "<!-- 3 -->📚 Documentation" },
+              { message = "^perf", group = "<!-- 4 -->⚡ Performance" },
+              { message = "^refactor", group = "<!-- 2 -->🚜 Refactor" },
+              { message = "^style", group = "<!-- 5 -->🎨 Styling" },
+              { message = "^test", group = "<!-- 6 -->🧪 Testing" },
+              { message = "^chore\\(release\\): prepare for", skip = true },
+              { message = "^chore\\(deps.*\\)", skip = true },
+              { message = "^chore\\(pr\\)", skip = true },
+              { message = "^chore\\(pull\\)", skip = true },
+              { message = "^chore|^ci", group = "<!-- 7 -->⚙️ Miscellaneous Tasks" },
+              { body = ".*security", group = "<!-- 8 -->🛡️ Security" },
+              { message = "^revert", group = "<!-- 9 -->◀️ Revert" },
+              { message = ".*", group = "<!-- 10 -->💼 Other" },
+          ]
+          filter_commits = false
+          link_parsers = [
+              { pattern = "([A-Z]+-[0-9]+)", href = "https://worth-ai.atlassian.net/browse/$1" },
+              { pattern = "#([0-9]+)", href = "https://github.com/${{ github.repository }}/pull/$1" }
+          ]
+          use_branch_tags = false
+          topo_order = false
+          topo_order_commits = true
+          sort_commits = "oldest"
+          recurse_submodules = false
+          EOF
+          
+      - name: Generate and group changelog by Jira type
         env:
-          OUTPUT: CHANGES.md
-          GITHUB_REPO: ${{ github.repository }}
-      - name: Generate changelog (custom tag range)
-        if: steps.changelog-mode.outputs.mode == 'custom'
-        uses: orhun/git-cliff-action@v4
-        id: git-cliff-custom
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_DOMAIN: ${{ secrets.JIRA_DOMAIN }}
+          PREV_TAG: ${{ env.PREV_TAG }}
+          CURRENT_TAG: ${{ env.CURRENT_TAG }}
+        run: |
+          npx git-cliff@latest "$PREV_TAG..$CURRENT_TAG" --output RAW_CHANGELOG.md
+      
+          # Prepend header
+          CURRENT_TAG_DATE=$(git log -1 --format="%cs" "$CURRENT_TAG")
+          CLICKABLE_HEADER="## [$CURRENT_TAG](https://github.com/${{ github.repository }}/compare/$PREV_TAG...$CURRENT_TAG) - $CURRENT_TAG_DATE"
+          echo "$CLICKABLE_HEADER\n" > TEMP_RAW.md
+          echo "" >> TEMP_RAW.md
+          cat RAW_CHANGELOG.md >> TEMP_RAW.md
+          mv TEMP_RAW.md RAW_CHANGELOG.md
+      
+          get_jira_type() {
+              local jira_id="$1"
+              response=$(timeout 10 curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+                  -H "Accept: application/json" \
+                  "https://$JIRA_DOMAIN.atlassian.net/rest/api/3/issue/${jira_id}" 2>/dev/null)
+              echo "$response" | yq eval '.fields.issuetype.name' - 2>/dev/null
+          }
+          
+          get_jira_title() {
+              local jira_id="$1"
+              response=$(timeout 10 curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+                  -H "Accept: application/json" \
+                  "https://$JIRA_DOMAIN.atlassian.net/rest/api/3/issue/${jira_id}" 2>/dev/null)
+              echo "$response" | yq eval '.fields.summary' - 2>/dev/null
+          }
+          
+          # Function to get emoji based on commit tags
+          get_commit_emoji() {
+              local commit_message="$1"
+              local emojis=""
+          
+              # Priority tags
+              [[ "$commit_message" == *"#HOTFIX"* ]] && emojis+="🔥"
+              [[ "$commit_message" == *"#FAST"* ]] && emojis+="⚡"
+              [[ "$commit_message" == *"#REGULAR"* ]] && emojis+="🚜"
+          
+              # Environment tags
+              [[ "$commit_message" == *"#LIVE"* ]] && emojis+="🚀"
+              [[ "$commit_message" == *"#FLAG"* ]] && emojis+="🚩"
+          
+              # Default emoji if no tags matched
+              if [[ -z "$emojis" ]]; then
+                  emojis="📝"
+              fi
+          
+              echo "$emojis"
+          }
+
+          get_jira_type_icon() {
+              local jira_type="$1"
+          
+              case "$jira_type" in
+                  "Epic")
+                      echo "🧠"  # Epic: big-picture thinking
+                      ;;
+                  "Bug")
+                      echo "🐛"  # Bug: software bug
+                      ;;
+                  "Defect")
+                      echo "🛑"  # Defect: critical issue
+                      ;;
+                  "Enhancement")
+                      echo "✨"  # Enhancement: polish/improvement
+                      ;;
+                  "Spike")
+                      echo "🧪"  # Spike: research/exploration
+                      ;;
+                  "Story")
+                      echo "📖"  # Story: user story
+                      ;;
+                  "Tech Task")
+                      echo "💻"  # Tech Task: developer work
+                      ;;
+                  "Task")
+                      echo "✅"  # Task: action item
+                      ;;
+                  "Subtask"|"Sub-task")
+                      echo "🔗"  # Subtask: linked to parent
+                      ;;
+                  "Other"|*)
+                      echo "📝"  # Other/default: documented item
+                      ;;
+              esac
+          }
+          
+          
+          group_changelog_by_jira_type() {
+              local input_file="$1"
+              local output_file="$2"
+              declare -A grouped_entries
+              declare -A jira_cache
+              declare -A jira_title_cache
+              declare -A jira_commits
+              
+              local header=""
+          
+              while IFS= read -r line; do
+                  # Preserve clickable version headers (with GitHub links)
+                  if [[ "$line" =~ ^##\ \[.*\]\(https://github\.com.*\) ]]; then
+                      if [[ -z "$header" ]]; then
+                          header="$line"
+                      else
+                          header="$header"$'\n'"$line"
+                      fi
+                      continue
+                  fi
+          
+                  # Skip standard git-cliff generated release headers (without links)
+                  if [[ "$line" =~ ^##\ \[[vV]?\.?[0-9]+\.[0-9]+\.[0-9]+([-a-zA-Z0-9]*)?\]\ -\ [0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+                      continue
+                  fi
+                  
+                  if [[ "$line" =~ ^###\ 💼\ Other$ ]]; then
+                      continue
+                  fi
+          
+                  if [[ -z "$line" ]]; then
+                      continue
+                  fi
+                  
+                  # Match Jira ID in format [ABC-123] anywhere in the line and extract the full commit message
+                  if [[ "$line" =~ \-\ (.*)?\[([A-Z]+-[0-9]+)\](.*)$ ]]; then
+                      jira_id="${BASH_REMATCH[2]}"
+                      # Reconstruct the full commit message without the leading "- "
+                      commit_message="${line#- }"
+          
+                      # Cache or fetch Jira type
+                      if [[ -z "${jira_cache[$jira_id]}" ]]; then
+                          jira_type_raw=$(get_jira_type "$jira_id" 2>/dev/null)
+                          if [[ -z "$jira_type_raw" || "$jira_type_raw" == *"error"* || "$jira_type_raw" == "null" ]]; then
+                              jira_cache["$jira_id"]="Other"
+                          else
+                              jira_cache["$jira_id"]="$jira_type_raw"
+                          fi
+                      fi
+          
+                      # Cache or fetch Jira title
+                      if [[ -z "${jira_title_cache[$jira_id]}" ]]; then
+                          jira_title_raw=$(get_jira_title "$jira_id" 2>/dev/null)
+                          if [[ -z "$jira_title_raw" || "$jira_title_raw" == *"error"* || "$jira_title_raw" == "null" ]]; then
+                              jira_title_cache["$jira_id"]="No title available"
+                          else
+                              jira_title_cache["$jira_id"]="$jira_title_raw"
+                          fi
+                      fi
+          
+                      jira_type="${jira_cache[$jira_id]}"
+                      jira_title="${jira_title_cache[$jira_id]}"
+                      
+                      # Get appropriate emoji for the commit
+                      emoji=$(get_commit_emoji "$commit_message")
+          
+                      # Remove JIRA ticket links from commit message - handles both cases
+                      clean_commit=$(echo "$commit_message" | sed -E 's/\[[A-Z]+-[0-9]+\]\(https:\/\/[^)]+\)[ ]*:?[ ]*//g' | sed -E 's/\[[A-Z]+-[0-9]+\][ ]*:?[ ]*//g')
+          
+                      # Extract cherry-pick branch and remove from message, then append at end
+                      if [[ "$clean_commit" =~ \[Cherry-pick\ to\ ([^]]+)\] ]]; then
+                          branch_name="${BASH_REMATCH[1]}"
+                          clean_commit=$(echo "$clean_commit" | sed -E 's/\[Cherry-pick to ([^]]+)\]//g')
+                          # Clean up extra spaces first, then append train emoji at the end
+                          clean_commit=$(echo "$clean_commit" | sed 's/  */ /g' | sed 's/^ *//g' | sed 's/ *$//g')
+                          clean_commit="$clean_commit 🚂 $branch_name"
+                      fi
+          
+                      # Clean up extra spaces
+                      clean_commit=$(echo "$clean_commit" | sed 's/  */ /g' | sed 's/^ *//g' | sed 's/ *$//g')
+          
+                      # Format the commit with emoji
+                      formatted_commit="  - $emoji $clean_commit"
+                      
+                      # Group commits under JIRA tickets within types
+                      key="$jira_type-$jira_id"
+                      if [[ -z "${jira_commits[$key]}" ]]; then
+                          jira_commits["$key"]="**[$jira_id](https://$JIRA_DOMAIN.atlassian.net/browse/$jira_id) - $jira_title**"$'\n'"$formatted_commit"$'\n'
+                      else
+                          jira_commits["$key"]+="$formatted_commit"$'\n'
+                      fi
+                      
+                      # Only add to grouped_entries if the key has actual content
+                      if [[ -n "${jira_commits[$key]}" ]]; then
+                          grouped_entries["$jira_type"]="exists"
+                      fi
+                     
+                  elif [[ "$line" =~ ^\-\ (.+)$ ]]; then
+                      # Handle commits without JIRA IDs
+                      commit_message="${BASH_REMATCH[1]}"
+                      jira_type="Other"
+                      
+                      # Get appropriate emoji for the commit
+                      emoji=$(get_commit_emoji "$commit_message")
+                      
+                      # Replace cherry-pick format with train emoji and branch name, preserving trailing brackets
+                      clean_commit=$(echo "$commit_message" | sed -E 's/\[Cherry-pick to ([^]]+)\]/🚂 \1/g')
+                      
+                      # Clean up extra spaces
+                      clean_commit=$(echo "$clean_commit" | sed 's/  */ /g' | sed 's/^ *//g' | sed 's/ *$//g')
+                      
+                      formatted_commit="  - $emoji $clean_commit"
+                      
+                      if [[ -z "${jira_commits[$jira_type-NO_JIRA]}" ]]; then
+                          jira_commits["$jira_type-NO_JIRA"]="$formatted_commit"
+                      else
+                          jira_commits["$jira_type-NO_JIRA"]+="$formatted_commit"$'\n'
+                      fi
+                      
+                      grouped_entries["$jira_type"]="exists"
+                  fi
+          
+              done < "$input_file"
+          
+              # Write header
+              echo -e "$header\n" > "$output_file"
+          
+              # Define order of JIRA types (customize as needed)
+              type_order=("Story" "Task" "Bug" "Epic" "Sub-task" "Improvement" "New Feature" "Other")
+              
+              # Write organized output
+              for type in "${type_order[@]}"; do
+                  if [[ -n "${grouped_entries[$type]}" ]]; then
+                      type_icon=$(get_jira_type_icon "$type")
+                      echo -e "### $type_icon $type\n" >> "$output_file"
+                      
+                      # Find all JIRA tickets for this type and sort them
+                      for key in $(printf '%s\n' "${!jira_commits[@]}" | grep "^$type-" | sort); do
+                          content="${jira_commits[$key]}"
+                          if [[ -n "$content" ]]; then
+                              echo -e "$content" >> "$output_file"
+                          fi
+                      done
+                      
+                      echo >> "$output_file"
+                  fi
+              done
+              
+              # Handle any remaining types not in the predefined order
+              for type in "${!grouped_entries[@]}"; do
+                  # Check if this type was already processed
+                  type_found=false
+                  for ordered_type in "${type_order[@]}"; do
+                      if [[ "$type" == "$ordered_type" ]]; then
+                          type_found=true
+                          break
+                      fi
+                  done
+                  
+                  if [[ "$type_found" == false ]]; then
+                      type_icon=$(get_jira_type_icon "$type")
+                      echo -e "### $type_icon $type\n" >> "$output_file"
+                      
+                      for key in $(printf '%s\n' "${!jira_commits[@]}" | grep "^$type-" | sort); do
+                          content="${jira_commits[$key]}"
+                          if [[ -n "$content" ]]; then
+                              echo -e "$content" >> "$output_file"
+                          fi
+                      done
+                      
+                      echo >> "$output_file"
+                  fi
+              done
+          }
+      
+          # Group and write final changelog
+          group_changelog_by_jira_type RAW_CHANGELOG.md TEMP_CHANGELOG.md
+      
+          # Save release note content
+          cp TEMP_CHANGELOG.md NEW_RELEASE_CONTENT.md
+      
+          # Prepend to existing changelog
+          if [[ -f CHANGELOG.md ]]; then
+            echo "Existing CHANGELOG.md found, prepending..."
+            cat TEMP_CHANGELOG.md > NEW_CHANGELOG.md
+            echo "" >> NEW_CHANGELOG.md
+            cat CHANGELOG.md >> NEW_CHANGELOG.md
+            mv NEW_CHANGELOG.md CHANGELOG.md
+          else
+            mv TEMP_CHANGELOG.md CHANGELOG.md
+          fi
+      
+          echo "Changelog grouped by Jira type successfully!"
+
+      - name: Read changelog content
+        id: changelog
+        run: |
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          cat NEW_RELEASE_CONTENT.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # Clean up the temporary release content file
+          rm -f NEW_RELEASE_CONTENT.md
+
+      - name: Draft Release Notes
+        uses: softprops/action-gh-release@v2
         with:
-          config: cliff.toml
-          args: -vv --tag ${{ steps.changelog-mode.outputs.from_tag }}..${{ steps.changelog-mode.outputs.to_tag }} --strip header
+          body: ${{ steps.changelog.outputs.content }}
+          tag_name: ${{ env.CURRENT_TAG }}
+          draft: true
+          prerelease: false
+          make_latest: false
         env:
-          OUTPUT: CHANGES.md
-          GITHUB_REPO: ${{ github.repository }}
-      - name: Create Release Notes
-        uses: softprops/action-gh-release@v1
-        with:
-          body: ${{ steps.changelog-mode.outputs.mode == 'default' && steps.git-cliff-default.outputs.content || steps.git-cliff-custom.outputs.content }}
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && steps.changelog-mode.outputs.to_tag != '' && steps.changelog-mode.outputs.to_tag || github.ref_name }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.PERSONAL_ACCESS_TOKEN }}
+
+      - name: Commit, push changelog, and create PR
+        run: |
+          TARGET_BRANCH="chore/generate-changelog-${{ env.CURRENT_TAG }}"
+          echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
+
+          git config user.email "github.pat@joinworth.com"
+          git config user.name "patjoinworth"
+          
+          echo "${{ secrets.PERSONAL_ACCESS_TOKEN }}" > token.txt
+          gh auth login --with-token < token.txt
+
+          git checkout -b "$TARGET_BRANCH"
+          git add CHANGELOG.md
+          git commit -m "chore: generate CHANGELOG for ${{ env.CURRENT_TAG }}" || echo "No changes to commit"
+          git push origin "$TARGET_BRANCH"
+
+          gh pr create \
+            --body "This PR generates the `CHANGELOG.md` file to reflect changes from `${{ env.PREV_TAG }}` to `${{ env.CURRENT_TAG }}`." \
+            --title "#NO_JIRA: #LIVE Generate CHANGELOG for ${{ env.CURRENT_TAG }}" \
+            --head "$TARGET_BRANCH" \
+            --base "main"
+
+          echo "Waiting for PR to be fully created..."
+          sleep 5
+
+          # Get PR URL
+          PR_URL=$(gh pr view --json url -q ".url")
+          echo "Pull Request created: $PR_URL"
+
+          echo "${{ secrets.PERSONAL_ACCESS_TOKEN_AUTOAPPROVEBOT }}" > token.txt
+          gh auth login --with-token < token.txt
+   
+          # Approve the PR using GITHUB_TOKEN
+          gh pr review --approve "$PR_URL"
+      
+          # Wait for checks to complete before merging
+          echo "Waiting for status checks to complete..."
+          sleep 5
+          
+          # Check PR status and retry merge
+          MAX_RETRIES=5
+          RETRY_COUNT=0
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            if gh pr merge --squash --auto "$PR_URL"; then
+              echo "PR merged successfully"
+              break
+            else
+              echo "Merge failed, retrying in 5 seconds... (Attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)"
+              sleep 5
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+            fi
+          done
