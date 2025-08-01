@@ -78,20 +78,8 @@ jobs:
             exit 1
           fi
 
-      - name: Create GitHub Deployment
-        uses: chrnorm/deployment-action@v2
-        id: deployment
+      - name: Trigger Changelog Workflow
+        uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          environment: production
-          auto-merge: false
-          transient-environment: false
-          production-environment: true
-          description: Production deployment from tag
-      
-      - name: Mark Deployment as Success
-        uses: chrnorm/deployment-status@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
-          state: success
+          event-type: prod-deployment
