@@ -28,181 +28,102 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          
-      - name: List Latest Production Deployments
-        if: github.event_name == 'repository_dispatch'
-        run: |
-          echo "=== Latest Production Deployments ==="
-          
-          # Get deployments using GitHub API
-          curl -s \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/deployments?environment=production&per_page=10" \
-            | jq -r '.[] | select(.environment == "production") | "\(.created_at) | \(.ref) | \(.sha[0:7]) | \(.id)"' \
-            | head -5 \
-            | while IFS='|' read -r created_at ref sha deployment_id; do
-                echo "Deployment ID: $(echo $deployment_id | xargs)"
-                echo "  Created: $(echo $created_at | xargs)"
-                echo "  Ref: $(echo $ref | xargs)"
-                echo "  SHA: $(echo $sha | xargs)"
-                echo "  ---"
-              done
-          
-          echo ""
-          echo "=== Top 2 Latest Production Deployments (Detailed) ==="
-          
-          # Get top 2 deployments with more details
-          DEPLOYMENTS=$(curl -s \
-            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            "https://api.github.com/repos/${{ github.repository }}/deployments?environment=production&per_page=2")
-          
-          echo "$DEPLOYMENTS" | jq -r '
-            .[] | 
-            "=== Deployment \(.id) ===",
-            "Created: \(.created_at)",
-            "Environment: \(.environment)", 
-            "Ref: \(.ref)",
-            "SHA: \(.sha)",
-            "Description: \(.description // "No description")",
-            ""'
 
       - name: Extract current and previous tags
         run: |
           if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-            # Manual dispatch - use provided inputs
             PREV_TAG="${{ github.event.inputs.prev_tag }}"
             CURRENT_TAG="${{ github.event.inputs.latest_tag }}"
-            
-            echo "=== Manual Dispatch Mode ==="
-            echo "Using provided inputs:"
             echo "Previous tag: $PREV_TAG"
             echo "Current tag:  $CURRENT_TAG"
             
           elif [[ "${{ github.event_name }}" == "repository_dispatch" && "${{ github.event.action }}" == "prod-deployment" ]]; then
-            # Repository dispatch from production deployment
-            echo "=== Auto-Detection Mode (From Production Deployments) ==="
-            echo "Triggered by production deployment via repository_dispatch"
-            
-            # Function to check if a deployment ref is a tag
-            check_deployment_for_tag() {
-              local deployment_index=$1
-              local ref=$(echo "$ALL_DEPLOYMENTS" | jq -r ".[$deployment_index].ref")
-              local sha=$(echo "$ALL_DEPLOYMENTS" | jq -r ".[$deployment_index].sha")
-              
-              echo "Checking deployment $((deployment_index + 1)): ref=$ref, sha=${sha:0:7}"
-              
-              # Check if ref is a tag (starts with refs/tags/ or check if tag exists)
-              if [[ "$ref" == refs/tags/* ]]; then
-                # Extract tag name from refs/tags/tagname
-                tag_name="${ref#refs/tags/}"
-                echo "  Found tag format: $tag_name"
-                echo "$tag_name"
-                return 0
-              elif git rev-parse --verify "refs/tags/$ref" >/dev/null 2>&1; then
-                echo "  Ref '$ref' exists as a tag"
-                echo "$ref"
-                return 0
-              else
-                echo "  Ref '$ref' is not a tag, checking SHA for associated tags"
-                
-                # Try to find a tag that points to this SHA
-                TAG_FOR_SHA=$(git tag --points-at "$sha" 2>/dev/null | head -1)
-                
-                if [[ -n "$TAG_FOR_SHA" ]]; then
-                  echo "  Found tag '$TAG_FOR_SHA' pointing to SHA $sha"
-                  echo "$TAG_FOR_SHA"
-                  return 0
-                else
-                  echo "  No tag found for SHA $sha"
-                  return 1
-                fi
-              fi
-            }
-            
-            # Get more deployments initially to have options for searching
-            echo "Fetching production deployments..."
-            ALL_DEPLOYMENTS=$(curl -s \
+            echo "Fetching latest production deployments..."
+            DEPLOYMENTS=$(curl -s \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
-              "https://api.github.com/repos/${{ github.repository }}/deployments?environment=production&per_page=20")
+              "https://api.github.com/repos/${{ github.repository }}/deployments?environment=production&per_page=2")
             
-            TOTAL_DEPLOYMENTS=$(echo "$ALL_DEPLOYMENTS" | jq '. | length')
-            echo "Found $TOTAL_DEPLOYMENTS production deployments"
+            # Extract refs from the deployments
+            DEPLOYMENT_REFS=$(echo "$DEPLOYMENTS" | jq -r '.[].ref')
+           
+            # Convert to array
+            readarray -t REFS_ARRAY <<< "$DEPLOYMENT_REFS"
             
             # Initialize variables
             CURRENT_TAG=""
             PREV_TAG=""
+
+            echo "Checking if refs are tags..."
             
-            echo ""
-            echo "=== Step 1: Finding Current Tag from Latest Deployment ==="
-            
-            # Check latest deployment for tag - exit immediately if not found
-            CURRENT_TAG=$(check_deployment_for_tag 0)
-            if [[ -z "$CURRENT_TAG" ]]; then
-              echo ""
-              echo "ERROR: Latest production deployment is not associated with any tag!"
-              echo "Latest deployment details:"
-              echo "$ALL_DEPLOYMENTS" | jq -r '.[0] | "  Ref: \(.ref)", "  SHA: \(.sha)", "  Created: \(.created_at)"'
-              echo ""
-              echo "Available recent tags:"
-              git tag --sort=-version:refname | head -5
-              echo ""
-              echo "Cannot generate changelog without a tag-based latest deployment."
-              exit 1
-            fi
-            
-            echo "✓ Current tag found: $CURRENT_TAG"
-            
-            echo ""
-            echo "=== Step 2: Finding Previous Tag from Earlier Deployments ==="
-            
-            # Search through remaining deployments to find previous tag
-            for ((i=1; i<TOTAL_DEPLOYMENTS; i++)); do
-              echo ""
-              FOUND_TAG=$(check_deployment_for_tag $i)
-              if [[ -n "$FOUND_TAG" ]]; then
-                PREV_TAG="$FOUND_TAG"
-                echo "✓ Previous tag found: $PREV_TAG (from deployment $((i + 1)))"
-                break
+            for i in "${!REFS_ARRAY[@]}"; do
+              ref="${REFS_ARRAY[$i]}"
+              echo "Checking ref: $ref"
+              
+              # Check if ref is a tag (starts with refs/tags/ or check if tag exists)
+              if [[ "$ref" == refs/tags/* ]]; then
+                tag_name="${ref#refs/tags/}"
+                echo "  Found tag format: $tag_name"
+                
+                if [[ -z "$CURRENT_TAG" ]]; then
+                  CURRENT_TAG="$tag_name"
+                elif [[ -z "$PREV_TAG" ]]; then
+                  PREV_TAG="$tag_name"
+                  break
+                fi
+              else
+                if git rev-parse --verify "refs/tags/$ref" >/dev/null 2>&1; then
+                  if [[ -z "$CURRENT_TAG" ]]; then
+                    CURRENT_TAG="$ref"
+                  elif [[ -z "$PREV_TAG" ]]; then
+                    PREV_TAG="$ref"
+                    break
+                  fi
+                else
+                  DEPLOYMENT_SHA=$(echo "$DEPLOYMENTS" | jq -r ".[$i].sha")
+                  echo "  Deployment SHA: $DEPLOYMENT_SHA"
+                  
+                  # Try to find a tag that points to this SHA
+                  TAG_FOR_SHA=$(git tag --points-at "$DEPLOYMENT_SHA" 2>/dev/null | head -1)
+                  
+                  if [[ -n "$TAG_FOR_SHA" ]]; then
+                    echo "  Found tag '$TAG_FOR_SHA' pointing to SHA $DEPLOYMENT_SHA"
+                    
+                    if [[ -z "$CURRENT_TAG" ]]; then
+                      CURRENT_TAG="$TAG_FOR_SHA"
+                      echo "  Set as CURRENT_TAG: $CURRENT_TAG"
+                    elif [[ -z "$PREV_TAG" ]]; then
+                      PREV_TAG="$TAG_FOR_SHA"
+                      echo "  Set as PREV_TAG: $PREV_TAG"
+                      break
+                    fi
+                  else
+                    echo "  No tag found for SHA $DEPLOYMENT_SHA, skipping this deployment"
+                  fi
+                fi
               fi
             done
             
-            # If still no previous tag found, fetch more deployments
-            if [[ -z "$PREV_TAG" ]] && [[ $TOTAL_DEPLOYMENTS -eq 20 ]]; then
+            # Validation
+            if [[ -z "$CURRENT_TAG" ]]; then
+              echo "ERROR: Could not find a tag in the latest production deployment"
+              echo "Available deployment refs:"
+              echo "$DEPLOYMENT_REFS"
               echo ""
-              echo "No tag found in first 20 deployments, fetching more..."
-              
-              EXTENDED_DEPLOYMENTS=$(curl -s \
-                -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                -H "Accept: application/vnd.github.v3+json" \
-                "https://api.github.com/repos/${{ github.repository }}/deployments?environment=production&per_page=50")
-              
-              ALL_DEPLOYMENTS="$EXTENDED_DEPLOYMENTS"
-              TOTAL_DEPLOYMENTS=$(echo "$ALL_DEPLOYMENTS" | jq '. | length')
-              echo "Extended search to $TOTAL_DEPLOYMENTS deployments"
-              
-              # Continue searching from where we left off
-              for ((i=20; i<TOTAL_DEPLOYMENTS; i++)); do
-                echo ""
-                FOUND_TAG=$(check_deployment_for_tag $i)
-                if [[ -n "$FOUND_TAG" ]]; then
-                  PREV_TAG="$FOUND_TAG"
-                  echo "✓ Previous tag found: $PREV_TAG (from deployment $((i + 1)))"
-                  break
-                fi
-              done
+              echo "Recent tags:"
+              git tag --sort=-version:refname | head -5
+              exit 1
             fi
             
-            # Final check for previous tag
             if [[ -z "$PREV_TAG" ]]; then
-              echo ""
-              echo "ERROR: Could not find any tag in the deployment history!"
-              echo "Searched through $TOTAL_DEPLOYMENTS deployments."
-              echo "Recent deployments:"
-              echo "$ALL_DEPLOYMENTS" | jq -r '.[0:5][] | "  \(.created_at) | \(.ref) | \(.sha[0:7])"'
-              exit 1
+              echo "Warning: Could not find a tag in the second latest production deployment"
+              echo "Falling back to previous tag chronologically"
+              PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || echo "")
+              
+              if [[ -z "$PREV_TAG" ]]; then
+                echo "Warning: Could not determine previous tag, using first commit"
+                PREV_TAG=$(git rev-list --max-parents=0 HEAD)
+              fi
             fi
             
             echo ""
@@ -234,158 +155,6 @@ jobs:
           # Export to GitHub environment
           echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
           echo "PREV_TAG=$PREV_TAG" >> $GITHUB_ENV
-
-      # - name: Extract current and previous tags
-      #   run: |
-      #     if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
-      #       # Manual dispatch - use provided inputs
-      #       PREV_TAG="${{ github.event.inputs.prev_tag }}"
-      #       CURRENT_TAG="${{ github.event.inputs.latest_tag }}"
-            
-      #       echo "=== Manual Dispatch Mode ==="
-      #       echo "Using provided inputs:"
-      #       echo "Previous tag: $PREV_TAG"
-      #       echo "Current tag:  $CURRENT_TAG"
-            
-      #     elif [[ "${{ github.event_name }}" == "repository_dispatch" && "${{ github.event.action }}" == "prod-deployment" ]]; then
-      #       # Repository dispatch from production deployment
-      #       echo "=== Auto-Detection Mode (From Production Deployments) ==="
-      #       echo "Triggered by production deployment via repository_dispatch"
-            
-      #       # Get latest 2 production deployments
-      #       echo "Fetching latest production deployments..."
-      #       DEPLOYMENTS=$(curl -s \
-      #         -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-      #         -H "Accept: application/vnd.github.v3+json" \
-      #         "https://api.github.com/repos/${{ github.repository }}/deployments?environment=production&per_page=2")
-            
-      #       # Extract refs from the deployments
-      #       DEPLOYMENT_REFS=$(echo "$DEPLOYMENTS" | jq -r '.[].ref')
-            
-      #       echo "Deployment refs found:"
-      #       echo "$DEPLOYMENT_REFS"
-            
-      #       # Convert to array
-      #       readarray -t REFS_ARRAY <<< "$DEPLOYMENT_REFS"
-            
-      #       # Initialize variables
-      #       CURRENT_TAG=""
-      #       PREV_TAG=""
-            
-      #       # Check each ref to see if it's a tag
-      #       echo ""
-      #       echo "Checking if refs are tags..."
-            
-      #       for i in "${!REFS_ARRAY[@]}"; do
-      #         ref="${REFS_ARRAY[$i]}"
-      #         echo "Checking ref: $ref"
-              
-      #         # Check if ref is a tag (starts with refs/tags/ or check if tag exists)
-      #         if [[ "$ref" == refs/tags/* ]]; then
-      #           # Extract tag name from refs/tags/tagname
-      #           tag_name="${ref#refs/tags/}"
-      #           echo "  Found tag format: $tag_name"
-                
-      #           if [[ -z "$CURRENT_TAG" ]]; then
-      #             CURRENT_TAG="$tag_name"
-      #             echo "  Set as CURRENT_TAG: $CURRENT_TAG"
-      #           elif [[ -z "$PREV_TAG" ]]; then
-      #             PREV_TAG="$tag_name"
-      #             echo "  Set as PREV_TAG: $PREV_TAG"
-      #             break
-      #           fi
-      #         else
-      #           # Check if the ref exists as a tag name directly
-      #           if git rev-parse --verify "refs/tags/$ref" >/dev/null 2>&1; then
-      #             echo "  Ref '$ref' exists as a tag"
-                  
-      #             if [[ -z "$CURRENT_TAG" ]]; then
-      #               CURRENT_TAG="$ref"
-      #               echo "  Set as CURRENT_TAG: $CURRENT_TAG"
-      #             elif [[ -z "$PREV_TAG" ]]; then
-      #               PREV_TAG="$ref"
-      #               echo "  Set as PREV_TAG: $PREV_TAG"
-      #               break
-      #             fi
-      #           else
-      #             echo "  Ref '$ref' is not a tag (likely branch/commit SHA)"
-                  
-      #             # Get the SHA from deployment and try to find associated tag
-      #             DEPLOYMENT_SHA=$(echo "$DEPLOYMENTS" | jq -r ".[$i].sha")
-      #             echo "  Deployment SHA: $DEPLOYMENT_SHA"
-                  
-      #             # Try to find a tag that points to this SHA
-      #             TAG_FOR_SHA=$(git tag --points-at "$DEPLOYMENT_SHA" 2>/dev/null | head -1)
-                  
-      #             if [[ -n "$TAG_FOR_SHA" ]]; then
-      #               echo "  Found tag '$TAG_FOR_SHA' pointing to SHA $DEPLOYMENT_SHA"
-                    
-      #               if [[ -z "$CURRENT_TAG" ]]; then
-      #                 CURRENT_TAG="$TAG_FOR_SHA"
-      #                 echo "  Set as CURRENT_TAG: $CURRENT_TAG"
-      #               elif [[ -z "$PREV_TAG" ]]; then
-      #                 PREV_TAG="$TAG_FOR_SHA"
-      #                 echo "  Set as PREV_TAG: $PREV_TAG"
-      #                 break
-      #               fi
-      #             else
-      #               echo "  No tag found for SHA $DEPLOYMENT_SHA, skipping this deployment"
-      #             fi
-      #           fi
-      #         fi
-      #       done
-            
-      #       # Validation
-      #       if [[ -z "$CURRENT_TAG" ]]; then
-      #         echo "ERROR: Could not find a tag in the latest production deployment"
-      #         echo "Available deployment refs:"
-      #         echo "$DEPLOYMENT_REFS"
-      #         echo ""
-      #         echo "Recent tags:"
-      #         git tag --sort=-version:refname | head -5
-      #         exit 1
-      #       fi
-            
-      #       if [[ -z "$PREV_TAG" ]]; then
-      #         echo "Warning: Could not find a tag in the second latest production deployment"
-      #         echo "Falling back to previous tag chronologically"
-      #         PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || echo "")
-              
-      #         if [[ -z "$PREV_TAG" ]]; then
-      #           echo "Warning: Could not determine previous tag, using first commit"
-      #           PREV_TAG=$(git rev-list --max-parents=0 HEAD)
-      #         fi
-      #       fi
-            
-      #       echo ""
-      #       echo "Final result from production deployments:"
-      #       echo "Current tag:  $CURRENT_TAG"
-      #       echo "Previous tag: $PREV_TAG"
-            
-      #     else
-      #       echo "ERROR: Unknown trigger event"
-      #       exit 1
-      #     fi
-          
-      #     # Validate tags exist
-      #     if [[ -n "$CURRENT_TAG" ]] && ! git rev-parse "$CURRENT_TAG" >/dev/null 2>&1; then
-      #       echo "ERROR: Current tag '$CURRENT_TAG' does not exist"
-      #       exit 1
-      #     fi
-          
-      #     if [[ -n "$PREV_TAG" ]] && ! git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
-      #       echo "ERROR: Previous tag '$PREV_TAG' does not exist"
-      #       exit 1
-      #     fi
-          
-      #     echo ""
-      #     echo "=== Final Tags ==="
-      #     echo "CURRENT_TAG=$CURRENT_TAG"
-      #     echo "PREV_TAG=$PREV_TAG"
-          
-      #     # Export to GitHub environment
-      #     echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
-      #     echo "PREV_TAG=$PREV_TAG" >> $GITHUB_ENV
     
       - name: Validate tags
         run: |
@@ -832,3 +601,8 @@ jobs:
               RETRY_COUNT=$((RETRY_COUNT + 1))
             fi
           done
+
+          # if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+          #   echo "Failed to merge after $MAX_RETRIES attempts"
+          #   exit 1
+          # fi
