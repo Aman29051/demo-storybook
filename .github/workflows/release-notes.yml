@@ -1,5 +1,4 @@
 name: Generate Changelog & Draft Release
-
 on:
   workflow_dispatch:
     inputs:
@@ -29,6 +28,45 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          
+      - name: List Latest Production Deployments
+        if: github.event_name == 'repository_dispatch'
+        run: |
+          echo "=== Latest Production Deployments ==="
+          
+          # Get deployments using GitHub API
+          curl -s \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/deployments?environment=production&per_page=10" \
+            | jq -r '.[] | select(.environment == "production") | "\(.created_at) | \(.ref) | \(.sha[0:7]) | \(.id)"' \
+            | head -5 \
+            | while IFS='|' read -r created_at ref sha deployment_id; do
+                echo "Deployment ID: $(echo $deployment_id | xargs)"
+                echo "  Created: $(echo $created_at | xargs)"
+                echo "  Ref: $(echo $ref | xargs)"
+                echo "  SHA: $(echo $sha | xargs)"
+                echo "  ---"
+              done
+          
+          echo ""
+          echo "=== Top 2 Latest Production Deployments (Detailed) ==="
+          
+          # Get top 2 deployments with more details
+          DEPLOYMENTS=$(curl -s \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            "https://api.github.com/repos/${{ github.repository }}/deployments?environment=production&per_page=2")
+          
+          echo "$DEPLOYMENTS" | jq -r '
+            .[] | 
+            "=== Deployment \(.id) ===",
+            "Created: \(.created_at)",
+            "Environment: \(.environment)", 
+            "Ref: \(.ref)",
+            "SHA: \(.sha)",
+            "Description: \(.description // "No description")",
+            ""'
 
       - name: Extract current and previous tags
         run: |
@@ -37,47 +75,89 @@ jobs:
             PREV_TAG="${{ github.event.inputs.prev_tag }}"
             CURRENT_TAG="${{ github.event.inputs.latest_tag }}"
             
-            echo "Using manual dispatch inputs:"
+            echo "=== Manual Dispatch Mode ==="
+            echo "Using provided inputs:"
             echo "Previous tag: $PREV_TAG"
             echo "Current tag:  $CURRENT_TAG"
-          elif [[ "${{ github.event_name }}" == "deployment_status" ]]; then
-            # Deployment trigger - automatically determine tags
-            echo "Triggered by successful production deployment"
             
-            # Get the current tag from the deployment (assuming it's tagged)
-            CURRENT_TAG=$(git describe --tags --exact-match "${{ github.event.deployment.sha }}" 2>/dev/null || echo "")
+          elif [[ "${{ github.event_name }}" == "repository_dispatch" && "${{ github.event.action }}" == "prod-deployment" ]]; then
+            # Repository dispatch from production deployment
+            echo "=== Auto-Detection Mode ==="
+            echo "Triggered by production deployment via repository_dispatch"
             
-            if [[ -z "$CURRENT_TAG" ]]; then
-              # If no exact tag match, try to find the most recent tag
-              CURRENT_TAG=$(git describe --tags --abbrev=0 "${{ github.event.deployment.sha }}" 2>/dev/null || echo "")
+            # Get all tags sorted by version (most recent first)
+            echo "Fetching all tags..."
+            git fetch --tags
+            
+            # List all tags to debug
+            echo "All available tags:"
+            git tag --sort=-version:refname | head -10
+            
+            # Try to get deployment info from the event payload if available
+            if [[ -n "${{ github.event.client_payload.deployment_sha }}" ]]; then
+              DEPLOYMENT_SHA="${{ github.event.client_payload.deployment_sha }}"
+              echo "Using deployment SHA from payload: $DEPLOYMENT_SHA"
+              
+              # Try to find tag for this SHA
+              CURRENT_TAG=$(git describe --tags --exact-match "$DEPLOYMENT_SHA" 2>/dev/null || echo "")
+              
+              if [[ -z "$CURRENT_TAG" ]]; then
+                # If no exact match, find the most recent tag reachable from this SHA
+                CURRENT_TAG=$(git describe --tags --abbrev=0 "$DEPLOYMENT_SHA" 2>/dev/null || echo "")
+              fi
+            else
+              # Fallback: use the most recent tag
+              echo "No deployment SHA in payload, using most recent tag"
+              CURRENT_TAG=$(git describe --tags --abbrev=0 HEAD 2>/dev/null || echo "")
             fi
             
             if [[ -z "$CURRENT_TAG" ]]; then
-              echo "Warning: Could not determine current tag from deployment SHA: ${{ github.event.deployment.sha }}"
-              echo "Deployment ref: ${{ github.event.deployment.ref }}"
-              # Try using the deployment ref if it looks like a tag
-              if [[ "${{ github.event.deployment.ref }}" =~ ^refs/tags/.* ]]; then
-                CURRENT_TAG="${{ github.event.deployment.ref }}"
-                CURRENT_TAG="${CURRENT_TAG#refs/tags/}"
-              else
-                echo "Error: Cannot determine tag for changelog generation"
-                exit 1
+              echo "ERROR: Could not determine current tag"
+              echo "Available tags:"
+              git tag --sort=-version:refname | head -5
+              exit 1
+            fi
+            
+            # Get the previous tag (second most recent)
+            PREV_TAG=$(git tag --sort=-version:refname | grep -A1 "^${CURRENT_TAG}$" | tail -n1)
+            
+            # If PREV_TAG is the same as CURRENT_TAG, we need to get the actual previous one
+            if [[ "$PREV_TAG" == "$CURRENT_TAG" ]] || [[ -z "$PREV_TAG" ]]; then
+              # Alternative method: get previous tag chronologically
+              PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || echo "")
+              
+              if [[ -z "$PREV_TAG" ]]; then
+                echo "Warning: Could not determine previous tag, using first commit"
+                PREV_TAG=$(git rev-list --max-parents=0 HEAD)
               fi
             fi
             
-            # Get the previous tag
-            PREV_TAG=$(git describe --tags --abbrev=0 "${CURRENT_TAG}^" 2>/dev/null || echo "")
-            
-            if [[ -z "$PREV_TAG" ]]; then
-              echo "Warning: Could not determine previous tag, using first commit"
-              PREV_TAG=$(git rev-list --max-parents=0 HEAD)
-            fi
-            
-            echo "Automatically determined tags:"
-            echo "Previous tag: $PREV_TAG"
+            echo "Auto-determined tags:"
             echo "Current tag:  $CURRENT_TAG"
+            echo "Previous tag: $PREV_TAG"
+            
+          else
+            echo "ERROR: Unknown trigger event"
+            exit 1
           fi
-      
+          
+          # Validate tags exist
+          if [[ -n "$CURRENT_TAG" ]] && ! git rev-parse "$CURRENT_TAG" >/dev/null 2>&1; then
+            echo "ERROR: Current tag '$CURRENT_TAG' does not exist"
+            exit 1
+          fi
+          
+          if [[ -n "$PREV_TAG" ]] && ! git rev-parse "$PREV_TAG" >/dev/null 2>&1; then
+            echo "ERROR: Previous tag '$PREV_TAG' does not exist"
+            exit 1
+          fi
+          
+          echo ""
+          echo "=== Final Tags ==="
+          echo "CURRENT_TAG=$CURRENT_TAG"
+          echo "PREV_TAG=$PREV_TAG"
+          
+          # Export to GitHub environment
           echo "CURRENT_TAG=$CURRENT_TAG" >> $GITHUB_ENV
           echo "PREV_TAG=$PREV_TAG" >> $GITHUB_ENV
 
