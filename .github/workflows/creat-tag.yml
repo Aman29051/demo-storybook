@@ -22,8 +22,11 @@ on:
         required: false
         type: string
         default: ""
+
 permissions:
   contents: write
+  deployments: write  
+
 jobs:
   create_tag:
     runs-on: ubuntu-latest
@@ -81,9 +84,9 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           environment: production
-          auto_merge: false
-          transient_environment: false
-          production_environment: true
+          auto-merge: false
+          transient-environment: false
+          production-environment: true
           description: Production deployment from tag
       
       - name: Mark Deployment as Success
@@ -92,4 +95,3 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           deployment_id: ${{ steps.deployment.outputs.deployment_id }}
           state: success
-     
