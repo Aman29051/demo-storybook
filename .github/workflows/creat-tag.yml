@@ -76,7 +76,8 @@ jobs:
           fi
 
       - name: Create GitHub Deployment
-        uses: peter-evans/create-deployment@v2
+        uses: chrnorm/deployment-action@v2
+        id: deployment
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           environment: production
@@ -86,10 +87,9 @@ jobs:
           description: Production deployment from tag
       
       - name: Mark Deployment as Success
-        uses: peter-evans/create-deployment-status@v2
+        uses: chrnorm/deployment-status@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          environment: production
+          deployment_id: ${{ steps.deployment.outputs.deployment_id }}
           state: success
-
-         
+     
