@@ -74,3 +74,14 @@ jobs:
             echo "❌ Failed to create tag. Ensure the tag doesn't exist and follows increment rules."
             exit 1
           fi
+
+      - name: Create GitHub Deployment
+        uses: peter-evans/create-deployment@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          environment: production
+          auto_merge: false
+          transient_environment: false
+          production_environment: true
+          description: Production deployment
+         
