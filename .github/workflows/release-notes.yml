@@ -15,8 +15,6 @@ on:
         default: ''
   repository_dispatch:
     types: [prod-deployment]
-  deployment_status:
-    types: [success]  
 
 permissions:
   contents: write
