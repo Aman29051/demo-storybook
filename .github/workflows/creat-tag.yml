@@ -93,5 +93,5 @@ jobs:
         uses: chrnorm/deployment-status@v2
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-          deployment_id: ${{ steps.deployment.outputs.deployment_id }}
+          deployment-id: ${{ steps.deployment.outputs.deployment_id }}
           state: success
