@@ -293,8 +293,16 @@ jobs:
                   # Match Jira ID in format [ABC-123] anywhere in the line and extract the full commit message
                   if [[ "$line" =~ \-\ (.*)?\[([A-Z]+-[0-9]+)\](.*)$ ]]; then
                       jira_id="${BASH_REMATCH[2]}"
+
+                       # Exclude false-positive JIRA IDs like PART-1, PART-2 etc.
+                      if [[ "$jira_id" =~ ^PART-[0-9]+$ ]]; then
+                          jira_id=""
+                      fi
+
+                      
                       # Reconstruct the full commit message without the leading "- "
                       commit_message="${line#- }"
+                      
           
                       # Cache or fetch Jira type
                       if [[ -z "${jira_cache[$jira_id]}" ]]; then
