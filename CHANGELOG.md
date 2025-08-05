@@ -1,3 +1,21 @@
+## [v1.1.24](https://github.com/Aman29051/demo-storybook/compare/v1.1.23...v1.1.24) - 2025-08-05
+
+
+### 🧰 Task
+
+**[INFRA-159](https://worth-ai.atlassian.net/browse/INFRA-159) - Implement time-based cleanup for release branches**
+  - 🚀 #LIVE Update branch cleanup workflow to use time-based deletion ([#422](https://github.com/Aman29051/demo-storybook/pull/422))
+
+**[INFRA-185](https://worth-ai.atlassian.net/browse/INFRA-185) - Add wait after PR creation in dev/qa pipelines**
+  - 🚜🚀 #LIVE Add wait after PR creation #REGULAR (Original PR: #114) ([#124](https://github.com/Aman29051/demo-storybook/pull/124)) 🚂 release/v0.46.0
+
+
+### 📝 Other
+
+  - 📝 Update generatechangelog.yaml
+
+
+
 # Changelog for v1.1.7 → v1.1.8
 
 ### Task
