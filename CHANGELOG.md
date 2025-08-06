@@ -1,3 +1,32 @@
+## [v1.1.25](https://github.com/Aman29051/demo-storybook/compare/v1.1.24...v1.1.25) - 2025-08-06
+
+
+### 🐛 Bug
+
+**[DOS-775](https://worth-ai.atlassian.net/browse/DOS-775) - [FAST TRACK] Update Giact to use Business Address vs. Control Person Address**
+  - 🚜🚀 #LIVE: GIACT payload now defaults to BusinessEntity over PersonEntity #REGULAR (Original PR: #1405) ([#1411](https://github.com/Aman29051/demo-storybook/pull/1411)) 🚂 release/v0.47.0
+
+
+### ✨ Enhancement
+
+**[DOS-751](https://worth-ai.atlassian.net/browse/DOS-751) - [BE] Utilize and Surface Google Place Fields from SERP**
+  - 🚜🚀 Expose SERP response in API and Kafka producer #LIVE [Cherry… …-pick to release/v0.47.0] #REGULAR (Original PR: #1368) ([#1402](https://github.com/Aman29051/demo-storybook/pull/1402))
+  - 🚜🚀 Fixed Google Profile Data Kafka Producer issue for potential… … business matches #LIVE #REGULAR (Original PR: #1394) ([#1403](https://github.com/Aman29051/demo-storybook/pull/1403)) 🚂 release/v0.47.0
+
+**[DOS-762](https://worth-ai.atlassian.net/browse/DOS-762) - [FAST TRACK] Empty State Standardization in Worth 360 Report**
+  - 🚜🚀 #LIVE Standardize empty data for reports #REGULAR (Original PR: #1390) ([#1404](https://github.com/Aman29051/demo-storybook/pull/1404)) 🚂 rele… …ase/v0.47.0
+
+**[PAT-607](https://worth-ai.atlassian.net/browse/PAT-607) - Support New Banking + Accounting Uploads**
+  - 🚜🚀 Docs Tab Update #LIVE #REGULAR (Original PR: #1392) ([#1400](https://github.com/Aman29051/demo-storybook/pull/1400)) 🚂 release/v0.47.0
+
+
+### 📝 Other
+
+**[DOS-747](https://worth-ai.atlassian.net/browse/DOS-747) - No title available**
+  - 🚜🚀 #LIVE fix: Fixes null corporation fact for zoominfo source [C… …herry-pick to release/v0.47.0] #REGULAR (Original PR: #1329) ([#1401](https://github.com/Aman29051/demo-storybook/pull/1401))
+
+
+
 # Changelog for v1.1.7 → v1.1.8
 
 ### Task
