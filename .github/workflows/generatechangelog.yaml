@@ -180,22 +180,80 @@ jobs:
           cat RAW_CHANGELOG.md >> TEMP_RAW.md
           mv TEMP_RAW.md RAW_CHANGELOG.md
       
+          # get_jira_type() {
+          #     local jira_id="$1"
+          #     sleep 0.5
+          #     response=$(timeout 10 curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+          #         -H "Accept: application/json" \
+          #         "https://$JIRA_DOMAIN.atlassian.net/rest/api/3/issue/${jira_id}" 2>/dev/null)
+          #     echo "$response" | yq eval '.fields.issuetype.name' - 2>/dev/null
+          # }
+          
+          # get_jira_title() {
+          #     local jira_id="$1"
+          #     sleep 0.5
+          #     response=$(timeout 10 curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+          #         -H "Accept: application/json" \
+          #         "https://$JIRA_DOMAIN.atlassian.net/rest/api/3/issue/${jira_id}" 2>/dev/null)
+          #     echo "$response" | yq eval '.fields.summary' - 2>/dev/null
+          # }
+
           get_jira_type() {
               local jira_id="$1"
               sleep 0.5
-              response=$(timeout 10 curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+              
+              # More robust curl command with better error handling
+              response=$(timeout 15 curl -s -w "\n%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
                   -H "Accept: application/json" \
-                  "https://$JIRA_DOMAIN.atlassian.net/rest/api/3/issue/${jira_id}" 2>/dev/null)
-              echo "$response" | yq eval '.fields.issuetype.name' - 2>/dev/null
+                  "https://$JIRA_DOMAIN.atlassian.net/rest/api/3/issue/${jira_id}" 2>/dev/null || echo -e "\nerror")
+              
+              # Split response and HTTP code
+              http_code=$(echo "$response" | tail -n1)
+              json_response=$(echo "$response" | head -n -1)
+              
+              # Check if curl failed or returned non-200 status
+              if [[ "$http_code" == "error" ]] || [[ "$http_code" != "200" ]]; then
+                  echo "Other"
+                  return 0
+              fi
+              
+              # Try to extract the issue type, fallback to "Other" if parsing fails
+              issue_type=$(echo "$json_response" | yq eval '.fields.issuetype.name' - 2>/dev/null)
+              
+              if [[ -z "$issue_type" ]] || [[ "$issue_type" == "null" ]] || [[ "$issue_type" == *"error"* ]]; then
+                  echo "Other"
+              else
+                  echo "$issue_type"
+              fi
           }
           
           get_jira_title() {
               local jira_id="$1"
               sleep 0.5
-              response=$(timeout 10 curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+              
+              # More robust curl command with better error handling
+              response=$(timeout 15 curl -s -w "\n%{http_code}" -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
                   -H "Accept: application/json" \
-                  "https://$JIRA_DOMAIN.atlassian.net/rest/api/3/issue/${jira_id}" 2>/dev/null)
-              echo "$response" | yq eval '.fields.summary' - 2>/dev/null
+                  "https://$JIRA_DOMAIN.atlassian.net/rest/api/3/issue/${jira_id}" 2>/dev/null || echo -e "\nerror")
+              
+              # Split response and HTTP code
+              http_code=$(echo "$response" | tail -n1)
+              json_response=$(echo "$response" | head -n -1)
+              
+              # Check if curl failed or returned non-200 status
+              if [[ "$http_code" == "error" ]] || [[ "$http_code" != "200" ]]; then
+                  echo "Unable to fetch title"
+                  return 0
+              fi
+              
+              # Try to extract the summary, fallback to default message if parsing fails
+              summary=$(echo "$json_response" | yq eval '.fields.summary' - 2>/dev/null)
+              
+              if [[ -z "$summary" ]] || [[ "$summary" == "null" ]] || [[ "$summary" == *"error"* ]]; then
+                  echo "No title available"
+              else
+                  echo "$summary"
+              fi
           }
           
           # Function to get emoji based on commit tags
