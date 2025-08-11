@@ -173,8 +173,8 @@ jobs:
           npx git-cliff@latest "$PREV_TAG..$CURRENT_TAG" --output RAW_CHANGELOG.md
       
           # Prepend header
-          CURRENT_TAG_DATE=$(git log -1 --format="%cs" "$CURRENT_TAG")
-          CLICKABLE_HEADER="## [$CURRENT_TAG](https://github.com/${{ github.repository }}/compare/$PREV_TAG...$CURRENT_TAG) - $CURRENT_TAG_DATE"
+          RELEASE_DATE=$(date +%Y-%m-%d)
+          CLICKABLE_HEADER="## [$CURRENT_TAG](https://github.com/${{ github.repository }}/compare/$PREV_TAG...$CURRENT_TAG) - $RELEASE_DATE"
           echo "$CLICKABLE_HEADER\n" > TEMP_RAW.md
           echo "" >> TEMP_RAW.md
           cat RAW_CHANGELOG.md >> TEMP_RAW.md
