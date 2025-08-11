@@ -1,3 +1,13 @@
+## [v1.1.26](https://github.com/Aman29051/demo-storybook/compare/v1.1.25...v1.1.26) - 2025-08-11
+
+
+### 📝 Other
+
+  - 📝 Update generatechangelog.yaml
+  - 📝 Update generatechangelog.yaml
+
+
+
 # Changelog for v1.1.7 → v1.1.8
 
 ### Task
