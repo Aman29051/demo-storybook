@@ -14,7 +14,7 @@ on:
         type: string
 
 jobs:
-  add_label_to_merged_prs:
+  label_prs:
     runs-on: ubuntu-latest
     steps:
       - name: Extract payload
@@ -105,33 +105,55 @@ jobs:
           echo ""
           echo "🚀 Fetching detailed PR information..."
           
-          # Try multiple API endpoints to get development information
+          # Try multiple API endpoints with different application types
           
-          # Method 1: Try with issue key first
-          echo "🔄 Method 1: Trying dev-status API with issue key..."
-          DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
-            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest")
+          APPLICATION_TYPES=("github" "stash" "bitbucket")
+          SUCCESS=false
           
-          DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
-          DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
-          
-          echo "📡 Development API (with key) HTTP Status: $DEV_HTTP_STATUS"
-          
-          # Method 2: If that fails, try with numeric issue ID
-          if [[ "$DEV_HTTP_STATUS" != "200" ]]; then
-            echo "🔄 Method 2: Trying dev-status API with issue ID..."
+          for APP_TYPE in "${APPLICATION_TYPES[@]}"; do
+            if [[ "$SUCCESS" == "true" ]]; then
+              break
+            fi
+            
+            echo "🔄 Method ${#APPLICATION_TYPES[@]}: Trying dev-status detail API with applicationType=${APP_TYPE}..."
+            
+            # Try with issue key first
             DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
-              "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${ISSUE_ID}&applicationType=github&dataType=pullrequest")
+              "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=${APP_TYPE}&dataType=pullrequest")
             
             DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
             DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
             
-            echo "📡 Development API (with ID) HTTP Status: $DEV_HTTP_STATUS"
-          fi
+            echo "📡 Development API (${APP_TYPE} with key) HTTP Status: $DEV_HTTP_STATUS"
+            
+            if [[ "$DEV_HTTP_STATUS" == "200" ]] && echo "$DEV_RESPONSE_BODY" | jq -e '.detail[0].pullRequests' > /dev/null 2>&1; then
+              SUCCESS=true
+              echo "✅ Success with applicationType=${APP_TYPE} and issue key"
+            elif [[ "$DEV_HTTP_STATUS" != "200" ]]; then
+              # Try with numeric issue ID
+              echo "🔄 Trying with issue ID for applicationType=${APP_TYPE}..."
+              DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
+                "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${ISSUE_ID}&applicationType=${APP_TYPE}&dataType=pullrequest")
+              
+              DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+              DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+              
+              echo "📡 Development API (${APP_TYPE} with ID) HTTP Status: $DEV_HTTP_STATUS"
+              
+              if [[ "$DEV_HTTP_STATUS" == "200" ]] && echo "$DEV_RESPONSE_BODY" | jq -e '.detail[0].pullRequests' > /dev/null 2>&1; then
+                SUCCESS=true
+                echo "✅ Success with applicationType=${APP_TYPE} and issue ID"
+              fi
+            fi
+            
+            if [[ "$SUCCESS" != "true" ]]; then
+              echo "❌ Failed with applicationType=${APP_TYPE}"
+            fi
+          done
           
-          # Method 3: Try the alternative summary endpoint
-          if [[ "$DEV_HTTP_STATUS" != "200" ]]; then
-            echo "🔄 Method 3: Trying dev-status summary API..."
+          # If all detail endpoints failed, try the summary endpoint one more time
+          if [[ "$SUCCESS" != "true" ]]; then
+            echo "🔄 Final attempt: Trying dev-status summary API..."
             DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
               "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/latest/issue/summary?issueId=${ISSUE_ID}")
             
