@@ -1,0 +1,68 @@
+name: Jira Cherry-pick Labeler
+
+on:
+  repository_dispatch:
+    types: [jira_ready_to_cherrypick]
+  workflow_dispatch:
+    inputs:
+      TICKET_KEY:
+        description: 'Jira ticket key (e.g., ABC-123)'
+        required: true
+        type: string
+      LABEL_TEXT:
+        description: 'Label to add to PRs'
+        required: true
+        type: string
+
+jobs:
+  label_prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract payload
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "TICKET_KEY=${{ github.event.inputs.TICKET_KEY }}" >> $GITHUB_ENV
+            echo "LABEL_TEXT=${{ github.event.inputs.LABEL_TEXT }}" >> $GITHUB_ENV
+          else
+            echo "TICKET_KEY=${{ github.event.client_payload.ticket_key }}" >> $GITHUB_ENV
+            echo "LABEL_TEXT=${{ github.event.client_payload.label_text }}" >> $GITHUB_ENV
+          fi
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
+      - name: Fetch linked PRs from Jira
+        run: |
+          PRS=$(curl -s -u ${{ secrets.JIRA_USER }}:${{ secrets.JIRA_API_TOKEN }} \
+            "https://your-domain.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest" \
+            | jq -r '.detail[0].pullRequests[] | select(.status=="MERGED") | "\(.repository.name) \(.url)"')
+
+          echo "$PRS" > prs.txt
+          echo "Found PRs:"
+          cat prs.txt
+
+      - name: Add label to each PR sequentially
+        run: |
+          while read repo pr_url; do
+            pr_number=$(basename $pr_url)
+            echo "Processing $repo PR #$pr_number"
+
+            # Create label if missing
+            # curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            #   "https://api.github.com/repos/<org>/$repo/labels" | jq -r '.[].name' | grep -Fxq "${LABEL_TEXT}" \
+            #   || curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            #     -H "Accept: application/vnd.github+json" \
+            #     https://api.github.com/repos/<org>/$repo/labels \
+            #     -d "{\"name\":\"${LABEL_TEXT}\", \"color\":\"ededed\"}"
+
+            # Add label to PR
+            # curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            #   -H "Accept: application/vnd.github+json" \
+            #   "https://api.github.com/repos/<org>/$repo/issues/$pr_number/labels" \
+            #   -d "{\"labels\":[\"${LABEL_TEXT}\"]}"
+
+            echo "✅ Added label to $repo PR #$pr_number"
+            sleep 60
+          done < prs.txt
