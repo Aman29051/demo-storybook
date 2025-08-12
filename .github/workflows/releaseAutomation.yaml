@@ -34,9 +34,13 @@ jobs:
           sudo apt-get install -y jq curl
 
       - name: Fetch linked PRs from Jira
+        env:
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          JIRA_DOMAIN: ${{ secrets.JIRA_DOMAIN }}
         run: |
-          PRS=$(curl -s -u ${{ secrets.JIRA_USER }}:${{ secrets.JIRA_API_TOKEN }} \
-            "https://your-domain.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest" \
+          PRS=$(curl -s -u $JIRA_EMAIL:$JIRA_API_TOKEN \
+            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest" \
             | jq -r '.detail[0].pullRequests[] | select(.status=="MERGED") | "\(.repository.name) \(.url)"')
 
           echo "$PRS" > prs.txt
