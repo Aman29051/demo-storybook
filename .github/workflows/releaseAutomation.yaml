@@ -27,11 +27,6 @@ jobs:
             echo "LABEL_TEXT=${{ github.event.client_payload.label_text }}" >> $GITHUB_ENV
           fi
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y jq curl
-
       - name: Fetch linked PRs from Jira
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
@@ -39,30 +34,101 @@ jobs:
           JIRA_DOMAIN: ${{ secrets.JIRA_DOMAIN }}
         run: |
           echo "Fetching PRs for ticket: ${TICKET_KEY}"
+          echo "Using Jira domain: ${JIRA_DOMAIN}"
+          echo "Using Jira email: ${JIRA_EMAIL}"
           
-          # Fetch raw response and save for debugging
-          RESPONSE=$(curl -s -u $JIRA_EMAIL:$JIRA_API_TOKEN \
-            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest")
-          
-          echo "Raw Jira response:"
-          echo "$RESPONSE" | jq '.' || echo "Invalid JSON response: $RESPONSE"
-          
-          # Check if response has the expected structure
-          if echo "$RESPONSE" | jq -e '.detail[0].pullRequests' > /dev/null 2>&1; then
-            PRS=$(echo "$RESPONSE" | jq -r '.detail[0].pullRequests[]? | select(.status=="MERGED") | "\(.repository.name) \(.url)"')
-          else
-            echo "No pullRequests found in response or unexpected structure"
-            PRS=""
+          # Validate required variables
+          if [[ -z "${TICKET_KEY}" || -z "${JIRA_DOMAIN}" || -z "${JIRA_EMAIL}" || -z "${JIRA_API_TOKEN}" ]]; then
+            echo "Error: Missing required environment variables"
+            echo "TICKET_KEY: ${TICKET_KEY:-'NOT SET'}"
+            echo "JIRA_DOMAIN: ${JIRA_DOMAIN:-'NOT SET'}"
+            echo "JIRA_EMAIL: ${JIRA_EMAIL:-'NOT SET'}"
+            echo "JIRA_API_TOKEN: ${JIRA_API_TOKEN:+'SET'}"
+            exit 1
           fi
           
-          # Save PRs to file
-          echo "$PRS" > prs.txt
+          # Try multiple Jira API endpoints to find PRs
+          ENDPOINTS=(
+            "https://${JIRA_DOMAIN}.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest"
+            "https://${JIRA_DOMAIN}.atlassian.net/rest/api/2/issue/${TICKET_KEY}?fields=*all&expand=names"
+            "https://${JIRA_DOMAIN}.atlassian.net/rest/api/3/issue/${TICKET_KEY}?fields=*all"
+          )
+          
+          FOUND_PRS=false
+          
+          for endpoint in "${ENDPOINTS[@]}"; do
+            echo "Trying endpoint: $endpoint"
+            RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN "$endpoint")
+            HTTP_STATUS=$(echo "$RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+            RESPONSE_BODY=$(echo "$RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+            
+            echo "HTTP Status: $HTTP_STATUS"
+            echo "Response body:"
+            echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
+            
+            if [[ "$HTTP_STATUS" == "200" ]]; then
+              # Try dev-status endpoint first
+              if echo "$RESPONSE_BODY" | jq -e '.detail[0].pullRequests' > /dev/null 2>&1; then
+                echo "Found PRs in dev-status endpoint"
+                # Sort by merge date (lastUpdate) in ascending order (earliest first)
+                PRS=$(echo "$RESPONSE_BODY" | jq -r '
+                  .detail[0].pullRequests[]? 
+                  | select(.status=="MERGED") 
+                  | "\(.lastUpdate) \(.repository.name) \(.url)"' | sort)
+                FOUND_PRS=true
+                break
+              # Try issue endpoint with development information
+              elif echo "$RESPONSE_BODY" | jq -e '.fields' > /dev/null 2>&1; then
+                echo "Found issue data, looking for development info..."
+                # Look for development information in custom fields or linked resources
+                DEV_INFO=$(echo "$RESPONSE_BODY" | jq -r '.fields | to_entries[] | select(.value.pullRequests? // false) | .value.pullRequests[]?')
+                if [[ -n "$DEV_INFO" ]]; then
+                  PRS=$(echo "$DEV_INFO" | jq -r 'select(.status=="MERGED") | "\(.lastUpdate // .updatedDate // "1970-01-01") \(.repository.name) \(.url)"' | sort)
+                  FOUND_PRS=true
+                  break
+                fi
+              fi
+            elif [[ "$HTTP_STATUS" == "401" ]]; then
+              echo "Authentication failed. Check your JIRA_EMAIL and JIRA_API_TOKEN"
+              exit 1
+            elif [[ "$HTTP_STATUS" == "404" ]]; then
+              echo "Ticket not found or no access. Check TICKET_KEY and permissions"
+            fi
+          done
+          
+          if [[ "$FOUND_PRS" == false ]]; then
+            echo "Trying alternative approach: searching for PRs via GitHub API..."
+            # Alternative: search GitHub for PRs that mention this ticket
+            GITHUB_PRS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/search/issues?q=${TICKET_KEY}+type:pr+is:merged+org:${{ github.repository_owner }}" \
+              | jq -r '.items[]? | "\(.closed_at) \(.repository_url | split("/")[-1]) \(.html_url)"' | sort)
+            
+            if [[ -n "$GITHUB_PRS" ]]; then
+              echo "Found PRs via GitHub search"
+              PRS="$GITHUB_PRS"
+              FOUND_PRS=true
+            fi
+          fi
+          
+          # Clean up the PRS format (remove timestamp for final output)
+          if [[ "$FOUND_PRS" == true ]]; then
+            echo "$PRS" | while read -r timestamp repo url; do
+              echo "$repo $url"
+            done > prs.txt
+          else
+            echo "" > prs.txt
+          fi
           
           if [[ -s prs.txt ]]; then
-            echo "Found PRs:"
+            echo "Found merged PRs (sorted by merge date, earliest first):"
             cat prs.txt
           else
             echo "No merged PRs found for ticket ${TICKET_KEY}"
+            echo "This could mean:"
+            echo "1. The ticket has no linked PRs"
+            echo "2. All linked PRs are still open"
+            echo "3. Jira-GitHub integration is not configured"
+            echo "4. You don't have permission to see development information"
             exit 0
           fi
 
@@ -117,7 +183,7 @@ jobs:
             # fi
             
             # Rate limiting - be nice to the API
-            echo "Waiting 60 seconds before next request..."
-            sleep 60
+            echo "Waiting 2 seconds before next request..."
+            sleep 2
             
           done < prs.txt
