@@ -27,163 +27,264 @@ jobs:
             echo "LABEL_TEXT=${{ github.event.client_payload.label_text }}" >> $GITHUB_ENV
           fi
 
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq curl
+
       - name: Fetch linked PRs from Jira
         env:
           JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_DOMAIN: ${{ secrets.JIRA_DOMAIN }}
         run: |
-          echo "Fetching PRs for ticket: ${TICKET_KEY}"
-          echo "Using Jira domain: ${JIRA_DOMAIN}"
-          echo "Using Jira email: ${JIRA_EMAIL}"
+          echo "🎯 Starting PR discovery for ticket: ${TICKET_KEY}"
+          echo "📋 Using Jira domain: ${JIRA_DOMAIN}"
+          echo "👤 Using Jira email: ${JIRA_EMAIL}"
+          echo ""
           
-          # Validate required variables
+          # Validate required environment variables
           if [[ -z "${TICKET_KEY}" || -z "${JIRA_DOMAIN}" || -z "${JIRA_EMAIL}" || -z "${JIRA_API_TOKEN}" ]]; then
-            echo "Error: Missing required environment variables"
+            echo "❌ Error: Missing required environment variables"
             echo "TICKET_KEY: ${TICKET_KEY:-'NOT SET'}"
-            echo "JIRA_DOMAIN: ${JIRA_DOMAIN:-'NOT SET'}"
+            echo "JIRA_DOMAIN: ${JIRA_DOMAIN:-'NOT SET'}"  
             echo "JIRA_EMAIL: ${JIRA_EMAIL:-'NOT SET'}"
             echo "JIRA_API_TOKEN: ${JIRA_API_TOKEN:+'SET'}"
             exit 1
           fi
           
-          # Try multiple Jira API endpoints to find PRs
-          ENDPOINTS=(
-            "https://${JIRA_DOMAIN}.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest"
-            "https://${JIRA_DOMAIN}.atlassian.net/rest/api/2/issue/${TICKET_KEY}?fields=*all&expand=names"
-            "https://${JIRA_DOMAIN}.atlassian.net/rest/api/3/issue/${TICKET_KEY}?fields=*all"
-          )
+          echo "🔍 Fetching issue data from Jira..."
+          JIRA_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
+            "https://$JIRA_DOMAIN.atlassian.net/rest/api/2/issue/${TICKET_KEY}?fields=customfield_10000,summary&expand=names")
           
-          FOUND_PRS=false
+          HTTP_STATUS=$(echo "$JIRA_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+          RESPONSE_BODY=$(echo "$JIRA_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
           
-          for endpoint in "${ENDPOINTS[@]}"; do
-            echo "Trying endpoint: $endpoint"
-            RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN "$endpoint")
-            HTTP_STATUS=$(echo "$RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
-            RESPONSE_BODY=$(echo "$RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
-            
-            echo "HTTP Status: $HTTP_STATUS"
-            echo "Response body:"
-            echo "$RESPONSE_BODY" | jq '.' 2>/dev/null || echo "$RESPONSE_BODY"
-            
-            if [[ "$HTTP_STATUS" == "200" ]]; then
-              # Try dev-status endpoint first
-              if echo "$RESPONSE_BODY" | jq -e '.detail[0].pullRequests' > /dev/null 2>&1; then
-                echo "Found PRs in dev-status endpoint"
-                # Sort by merge date (lastUpdate) in ascending order (earliest first)
-                PRS=$(echo "$RESPONSE_BODY" | jq -r '
-                  .detail[0].pullRequests[]? 
-                  | select(.status=="MERGED") 
-                  | "\(.lastUpdate) \(.repository.name) \(.url)"' | sort)
-                FOUND_PRS=true
-                break
-              # Try issue endpoint with development information
-              elif echo "$RESPONSE_BODY" | jq -e '.fields' > /dev/null 2>&1; then
-                echo "Found issue data, looking for development info..."
-                # Look for development information in custom fields or linked resources
-                DEV_INFO=$(echo "$RESPONSE_BODY" | jq -r '.fields | to_entries[] | select(.value.pullRequests? // false) | .value.pullRequests[]?')
-                if [[ -n "$DEV_INFO" ]]; then
-                  PRS=$(echo "$DEV_INFO" | jq -r 'select(.status=="MERGED") | "\(.lastUpdate // .updatedDate // "1970-01-01") \(.repository.name) \(.url)"' | sort)
-                  FOUND_PRS=true
-                  break
-                fi
-              fi
-            elif [[ "$HTTP_STATUS" == "401" ]]; then
-              echo "Authentication failed. Check your JIRA_EMAIL and JIRA_API_TOKEN"
-              exit 1
+          echo "📡 HTTP Status: $HTTP_STATUS"
+          
+          if [[ "$HTTP_STATUS" != "200" ]]; then
+            echo "❌ Failed to fetch Jira issue"
+            echo "Response: $RESPONSE_BODY"
+            if [[ "$HTTP_STATUS" == "401" ]]; then
+              echo "🔐 Authentication failed. Check JIRA_EMAIL and JIRA_API_TOKEN"
             elif [[ "$HTTP_STATUS" == "404" ]]; then
-              echo "Ticket not found or no access. Check TICKET_KEY and permissions"
+              echo "🔍 Ticket not found. Check TICKET_KEY and permissions"
             fi
-          done
-          
-          if [[ "$FOUND_PRS" == false ]]; then
-            echo "Trying alternative approach: searching for PRs via GitHub API..."
-            # Alternative: search GitHub for PRs that mention this ticket
-            GITHUB_PRS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/search/issues?q=${TICKET_KEY}+type:pr+is:merged+org:${{ github.repository_owner }}" \
-              | jq -r '.items[]? | "\(.closed_at) \(.repository_url | split("/")[-1]) \(.html_url)"' | sort)
-            
-            if [[ -n "$GITHUB_PRS" ]]; then
-              echo "Found PRs via GitHub search"
-              PRS="$GITHUB_PRS"
-              FOUND_PRS=true
-            fi
+            exit 1
           fi
           
-          # Clean up the PRS format (remove timestamp for final output)
-          if [[ "$FOUND_PRS" == true ]]; then
-            echo "$PRS" | while read -r timestamp repo url; do
-              echo "$repo $url"
-            done > prs.txt
+          echo "✅ Successfully fetched Jira issue data"
+          
+          # Extract development information from customfield_10000
+          DEV_FIELD=$(echo "$RESPONSE_BODY" | jq -r '.fields.customfield_10000 // empty')
+          
+          if [[ -z "$DEV_FIELD" ]]; then
+            echo "❌ No development information found in Jira issue"
+            echo "This means either:"
+            echo "  - No PRs are linked to this ticket"
+            echo "  - Jira-GitHub integration is not configured"
+            echo "  - The development field is in a different custom field"
+            exit 0
+          fi
+          
+          echo "🔗 Found development field data"
+          echo "Development field content: $DEV_FIELD"
+          
+          # Parse the development field to extract PR count
+          PR_COUNT=$(echo "$DEV_FIELD" | grep -o 'stateCount=[0-9]*' | cut -d= -f2)
+          PR_STATE=$(echo "$DEV_FIELD" | grep -o 'state=[A-Z]*' | cut -d= -f2)
+          
+          echo "📊 PR Statistics from Jira:"
+          echo "  Total PRs: ${PR_COUNT:-0}"
+          echo "  Overall State: ${PR_STATE:-UNKNOWN}"
+          
+          if [[ -z "$PR_COUNT" || "$PR_COUNT" == "0" ]]; then
+            echo "❌ No PRs found linked to ticket ${TICKET_KEY}"
+            exit 0
+          fi
+          
+          echo ""
+          echo "🚀 Fetching detailed PR information..."
+          
+          # Use the development status API to get detailed PR information
+          DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
+            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest")
+          
+          DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+          DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+          
+          echo "📡 Development API HTTP Status: $DEV_HTTP_STATUS"
+          
+          if [[ "$DEV_HTTP_STATUS" == "200" ]]; then
+            echo "✅ Successfully fetched development details"
+            
+            # Check if we have pullRequests in the response
+            if echo "$DEV_RESPONSE_BODY" | jq -e '.detail[0].pullRequests' > /dev/null 2>&1; then
+              echo "📦 Extracting merged PRs..."
+              
+              # Get all PRs and sort by lastUpdate (merge date) in ascending order
+              ALL_PRS=$(echo "$DEV_RESPONSE_BODY" | jq -r '
+                .detail[0].pullRequests[]? 
+                | "\(.lastUpdate // "1970-01-01T00:00:00.000Z") \(.status) \(.repository.name) \(.url) \(.displayId)"')
+              
+              if [[ -n "$ALL_PRS" ]]; then
+                echo ""
+                echo "📋 All PRs found:"
+                echo "$ALL_PRS" | while read -r timestamp status repo url displayId; do
+                  echo "  [$status] $repo PR #$displayId - $timestamp"
+                done
+                echo ""
+                
+                # Filter only merged PRs and sort by timestamp
+                MERGED_PRS=$(echo "$ALL_PRS" | grep " MERGED " | sort)
+                
+                if [[ -n "$MERGED_PRS" ]]; then
+                  echo "✅ Merged PRs (sorted by merge date, earliest first):"
+                  echo "$MERGED_PRS" | while read -r timestamp status repo url displayId; do
+                    echo "  $repo PR #$displayId - merged at $timestamp"
+                  done
+                  
+                  # Save to file for processing (remove timestamp and status for clean format)
+                  echo "$MERGED_PRS" | while read -r timestamp status repo url displayId; do
+                    echo "$repo $url"
+                  done > prs.txt
+                  
+                  echo ""
+                  echo "📄 Saved $(wc -l < prs.txt) merged PRs to file"
+                else
+                  echo "❌ No merged PRs found (all PRs are still open or in other states)"
+                  touch prs.txt
+                fi
+              else
+                echo "❌ No PRs found in development response"
+                touch prs.txt
+              fi
+            else
+              echo "❌ No pullRequests found in development API response"
+              echo "Response structure: $(echo "$DEV_RESPONSE_BODY" | jq -c '.')"
+              touch prs.txt
+            fi
           else
-            echo "" > prs.txt
+            echo "❌ Failed to fetch development details"
+            echo "Response: $DEV_RESPONSE_BODY"
+            
+            if [[ "$DEV_HTTP_STATUS" == "400" ]]; then
+              echo "💡 This might be due to:"
+              echo "  - Development integration not properly configured"
+              echo "  - Insufficient permissions for development data"
+              echo "  - The ticket ID format or issue key is invalid"
+            fi
+            
+            touch prs.txt
           fi
           
           if [[ -s prs.txt ]]; then
-            echo "Found merged PRs (sorted by merge date, earliest first):"
+            echo ""
+            echo "🎉 Final result - PRs ready for labeling:"
             cat prs.txt
           else
-            echo "No merged PRs found for ticket ${TICKET_KEY}"
-            echo "This could mean:"
-            echo "1. The ticket has no linked PRs"
-            echo "2. All linked PRs are still open"
-            echo "3. Jira-GitHub integration is not configured"
-            echo "4. You don't have permission to see development information"
-            exit 0
+            echo ""
+            echo "⚠️  No merged PRs found to label"
           fi
 
       - name: Add label to each PR sequentially
         run: |
+          echo ""
+          echo "🏷️  Starting PR labeling process..."
+          echo "Label to add: '${LABEL_TEXT}'"
+          echo ""
+          
           if [[ ! -s prs.txt ]]; then
-            echo "No PRs to process"
+            echo "ℹ️  No PRs to process - skipping labeling step"
             exit 0
           fi
+          
+          TOTAL_PRS=$(wc -l < prs.txt)
+          CURRENT_PR=0
+          
+          echo "📊 Processing $TOTAL_PRS PRs..."
+          echo ""
           
           while IFS=' ' read -r repo pr_url; do
             # Skip empty lines
             [[ -z "$repo" || -z "$pr_url" ]] && continue
             
+            CURRENT_PR=$((CURRENT_PR + 1))
             pr_number=$(basename "$pr_url")
-            echo "Processing $repo PR #$pr_number"
+            
+            echo "[$CURRENT_PR/$TOTAL_PRS] 🔧 Processing $repo PR #$pr_number"
             
             # Validate PR number is numeric
             if ! [[ "$pr_number" =~ ^[0-9]+$ ]]; then
-              echo "Invalid PR number: $pr_number, skipping"
+              echo "  ❌ Invalid PR number: $pr_number, skipping"
               continue
             fi
             
-            # Create label if it doesn't exist
-            # echo "Checking if label '${LABEL_TEXT}' exists in $repo..."
-            # LABEL_EXISTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            #   "https://api.github.com/repos/${{ github.repository_owner }}/$repo/labels" \
-            #   | jq -r --arg label "${LABEL_TEXT}" '.[] | select(.name == $label) | .name' || echo "")
+            # Check if label already exists in repository
+            echo "  🔍 Checking if label '${LABEL_TEXT}' exists in $repo..."
+            # LABEL_CHECK_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            #   "https://api.github.com/repos/${{ github.repository_owner }}/$repo/labels/${LABEL_TEXT}")
             
-            # if [[ -z "$LABEL_EXISTS" ]]; then
-            #   echo "Creating label '${LABEL_TEXT}' in $repo..."
-            #   curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            # LABEL_HTTP_STATUS=$(echo "$LABEL_CHECK_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+            
+            # if [[ "$LABEL_HTTP_STATUS" == "404" ]]; then
+            #   echo "  📝 Creating label '${LABEL_TEXT}' in $repo..."
+            #   CREATE_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -X POST \
+            #     -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             #     -H "Accept: application/vnd.github+json" \
             #     "https://api.github.com/repos/${{ github.repository_owner }}/$repo/labels" \
-            #     -d "{\"name\":\"${LABEL_TEXT}\", \"color\":\"0E8A16\", \"description\":\"Cherry-pick ready\"}"
+            #     -d "{\"name\":\"${LABEL_TEXT}\", \"color\":\"0E8A16\", \"description\":\"Ready for cherry-pick\"}")
+              
+            #   CREATE_HTTP_STATUS=$(echo "$CREATE_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+              
+            #   if [[ "$CREATE_HTTP_STATUS" == "201" ]]; then
+            #     echo "  ✅ Label created successfully"
+            #   else
+            #     echo "  ⚠️  Failed to create label (status: $CREATE_HTTP_STATUS)"
+            #   fi
+            # elif [[ "$LABEL_HTTP_STATUS" == "200" ]]; then
+            #   echo "  ✅ Label already exists"
             # else
-            #   echo "Label '${LABEL_TEXT}' already exists in $repo"
+            #   echo "  ⚠️  Error checking label (status: $LABEL_HTTP_STATUS)"
             # fi
             
             # Add label to PR
-            # echo "Adding label '${LABEL_TEXT}' to $repo PR #$pr_number..."
-            # RESULT=$(curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            echo "  🏷️  Adding label to PR #$pr_number..."
+            # ADD_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -X POST \
+            #   -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             #   -H "Accept: application/vnd.github+json" \
             #   "https://api.github.com/repos/${{ github.repository_owner }}/$repo/issues/$pr_number/labels" \
             #   -d "{\"labels\":[\"${LABEL_TEXT}\"]}")
             
-            # if echo "$RESULT" | jq -e '.[] | select(.name == env.LABEL_TEXT)' > /dev/null 2>&1; then
-            #   echo "✅ Successfully added label to $repo PR #$pr_number"
+            # ADD_HTTP_STATUS=$(echo "$ADD_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+            # ADD_RESPONSE_BODY=$(echo "$ADD_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+            
+            # if [[ "$ADD_HTTP_STATUS" == "200" ]]; then
+            #   # Verify the label was actually added
+            #   if echo "$ADD_RESPONSE_BODY" | jq -e --arg label "${LABEL_TEXT}" '.[] | select(.name == $label)' > /dev/null 2>&1; then
+            #     echo "  ✅ Successfully added label to $repo PR #$pr_number"
+            #   else
+            #     echo "  ⚠️  Label might not have been added properly"
+            #   fi
             # else
-            #   echo "❌ Failed to add label to $repo PR #$pr_number"
-            #   echo "Response: $RESULT"
+            #   echo "  ❌ Failed to add label to $repo PR #$pr_number (status: $ADD_HTTP_STATUS)"
+            #   if [[ "$ADD_HTTP_STATUS" == "404" ]]; then
+            #     echo "     💡 PR might not exist or repository might not be accessible"
+            #   elif [[ "$ADD_HTTP_STATUS" == "403" ]]; then
+            #     echo "     💡 Insufficient permissions to add labels"
+            #   fi
             # fi
             
-            # Rate limiting - be nice to the API
-            echo "Waiting 2 seconds before next request..."
-            sleep 2
+            # Rate limiting
+            if [[ $CURRENT_PR -lt $TOTAL_PRS ]]; then
+              echo "  ⏱️  Waiting 2 seconds before next PR..."
+              sleep 2
+            fi
+            
+            echo ""
             
           done < prs.txt
+          
+          echo "🎉 PR labeling process completed!"
+          echo "   Processed: $CURRENT_PR PRs"
+          echo "   Label: '${LABEL_TEXT}'"
