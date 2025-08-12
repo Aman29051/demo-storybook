@@ -1,5 +1,4 @@
 name: Jira Cherry-pick Labeler
-
 on:
   repository_dispatch:
     types: [jira_ready_to_cherrypick]
@@ -39,34 +38,86 @@ jobs:
           JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
           JIRA_DOMAIN: ${{ secrets.JIRA_DOMAIN }}
         run: |
-          PRS=$(curl -s -u $JIRA_EMAIL:$JIRA_API_TOKEN \
-            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest" \
-            | jq -r '.detail[0].pullRequests[] | select(.status=="MERGED") | "\(.repository.name) \(.url)"')
-
+          echo "Fetching PRs for ticket: ${TICKET_KEY}"
+          
+          # Fetch raw response and save for debugging
+          RESPONSE=$(curl -s -u $JIRA_EMAIL:$JIRA_API_TOKEN \
+            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest")
+          
+          echo "Raw Jira response:"
+          echo "$RESPONSE" | jq '.' || echo "Invalid JSON response: $RESPONSE"
+          
+          # Check if response has the expected structure
+          if echo "$RESPONSE" | jq -e '.detail[0].pullRequests' > /dev/null 2>&1; then
+            PRS=$(echo "$RESPONSE" | jq -r '.detail[0].pullRequests[]? | select(.status=="MERGED") | "\(.repository.name) \(.url)"')
+          else
+            echo "No pullRequests found in response or unexpected structure"
+            PRS=""
+          fi
+          
+          # Save PRs to file
           echo "$PRS" > prs.txt
-          echo "Found PRs:"
-          cat prs.txt
+          
+          if [[ -s prs.txt ]]; then
+            echo "Found PRs:"
+            cat prs.txt
+          else
+            echo "No merged PRs found for ticket ${TICKET_KEY}"
+            exit 0
+          fi
 
       - name: Add label to each PR sequentially
         run: |
-          while read repo pr_url; do
-            pr_number=$(basename $pr_url)
+          if [[ ! -s prs.txt ]]; then
+            echo "No PRs to process"
+            exit 0
+          fi
+          
+          while IFS=' ' read -r repo pr_url; do
+            # Skip empty lines
+            [[ -z "$repo" || -z "$pr_url" ]] && continue
+            
+            pr_number=$(basename "$pr_url")
             echo "Processing $repo PR #$pr_number"
-
-            # Create label if missing
-            # curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            #   "https://api.github.com/repos/<org>/$repo/labels" | jq -r '.[].name' | grep -Fxq "${LABEL_TEXT}" \
-            #   || curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            
+            # Validate PR number is numeric
+            if ! [[ "$pr_number" =~ ^[0-9]+$ ]]; then
+              echo "Invalid PR number: $pr_number, skipping"
+              continue
+            fi
+            
+            # Create label if it doesn't exist
+            # echo "Checking if label '${LABEL_TEXT}' exists in $repo..."
+            # LABEL_EXISTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            #   "https://api.github.com/repos/${{ github.repository_owner }}/$repo/labels" \
+            #   | jq -r --arg label "${LABEL_TEXT}" '.[] | select(.name == $label) | .name' || echo "")
+            
+            # if [[ -z "$LABEL_EXISTS" ]]; then
+            #   echo "Creating label '${LABEL_TEXT}' in $repo..."
+            #   curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             #     -H "Accept: application/vnd.github+json" \
-            #     https://api.github.com/repos/<org>/$repo/labels \
-            #     -d "{\"name\":\"${LABEL_TEXT}\", \"color\":\"ededed\"}"
-
+            #     "https://api.github.com/repos/${{ github.repository_owner }}/$repo/labels" \
+            #     -d "{\"name\":\"${LABEL_TEXT}\", \"color\":\"0E8A16\", \"description\":\"Cherry-pick ready\"}"
+            # else
+            #   echo "Label '${LABEL_TEXT}' already exists in $repo"
+            # fi
+            
             # Add label to PR
-            # curl -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            # echo "Adding label '${LABEL_TEXT}' to $repo PR #$pr_number..."
+            # RESULT=$(curl -s -X POST -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
             #   -H "Accept: application/vnd.github+json" \
-            #   "https://api.github.com/repos/<org>/$repo/issues/$pr_number/labels" \
-            #   -d "{\"labels\":[\"${LABEL_TEXT}\"]}"
-
-            echo "✅ Added label to $repo PR #$pr_number"
+            #   "https://api.github.com/repos/${{ github.repository_owner }}/$repo/issues/$pr_number/labels" \
+            #   -d "{\"labels\":[\"${LABEL_TEXT}\"]}")
+            
+            # if echo "$RESULT" | jq -e '.[] | select(.name == env.LABEL_TEXT)' > /dev/null 2>&1; then
+            #   echo "✅ Successfully added label to $repo PR #$pr_number"
+            # else
+            #   echo "❌ Failed to add label to $repo PR #$pr_number"
+            #   echo "Response: $RESULT"
+            # fi
+            
+            # Rate limiting - be nice to the API
+            echo "Waiting 60 seconds before next request..."
             sleep 60
+            
           done < prs.txt
