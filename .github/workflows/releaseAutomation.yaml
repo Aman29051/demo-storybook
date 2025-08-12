@@ -1,4 +1,4 @@
-name: Release Automation
+name: Jira Cherry-pick Labeler
 on:
   repository_dispatch:
     types: [jira_ready_to_cherrypick]
@@ -14,7 +14,7 @@ on:
         type: string
 
 jobs:
-  label_prs:
+  add_label_to_merged_prs:
     runs-on: ubuntu-latest
     steps:
       - name: Extract payload
@@ -105,14 +105,41 @@ jobs:
           echo ""
           echo "🚀 Fetching detailed PR information..."
           
-          # Use the development status API with the numeric issue ID
+          # Try multiple API endpoints to get development information
+          
+          # Method 1: Try with issue key first
+          echo "🔄 Method 1: Trying dev-status API with issue key..."
           DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
-            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${ISSUE_ID}&applicationType=github&dataType=pullrequest")
+            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest")
           
           DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
           DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
           
-          echo "📡 Development API HTTP Status: $DEV_HTTP_STATUS"
+          echo "📡 Development API (with key) HTTP Status: $DEV_HTTP_STATUS"
+          
+          # Method 2: If that fails, try with numeric issue ID
+          if [[ "$DEV_HTTP_STATUS" != "200" ]]; then
+            echo "🔄 Method 2: Trying dev-status API with issue ID..."
+            DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
+              "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${ISSUE_ID}&applicationType=github&dataType=pullrequest")
+            
+            DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+            DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+            
+            echo "📡 Development API (with ID) HTTP Status: $DEV_HTTP_STATUS"
+          fi
+          
+          # Method 3: Try the alternative summary endpoint
+          if [[ "$DEV_HTTP_STATUS" != "200" ]]; then
+            echo "🔄 Method 3: Trying dev-status summary API..."
+            DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
+              "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/latest/issue/summary?issueId=${ISSUE_ID}")
+            
+            DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
+            DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
+            
+            echo "📡 Development Summary API HTTP Status: $DEV_HTTP_STATUS"
+          fi
           
           if [[ "$DEV_HTTP_STATUS" == "200" ]]; then
             echo "✅ Successfully fetched development details"
@@ -167,31 +194,73 @@ jobs:
             echo "❌ Failed to fetch development details"
             echo "Response: $DEV_RESPONSE_BODY"
             
-            # Try alternative approach if the dev-status API fails
+            # Try alternative approach - parse the development field directly
             echo ""
-            echo "🔄 Attempting alternative approach..."
+            echo "🔄 Method 4: Parsing development field JSON directly..."
             
-            # Try to extract PR URLs from the development field JSON
-            PR_URLS=$(echo "$DEV_FIELD" | jq -r '.json | fromjson | .cachedValue.summary.pullrequest.byInstanceType.GitHub.pullRequests[]?.url // empty' 2>/dev/null || true)
+            # The development field contains cached PR information
+            echo "Development field JSON structure:"
+            echo "$DEV_FIELD" | jq '.' 2>/dev/null || echo "Not valid JSON format"
+            echo ""
+            
+            # Try multiple ways to extract PR information from the cached data
+            # First, try to get the full cached value
+            CACHED_JSON=$(echo "$DEV_FIELD" | jq -r '.json' 2>/dev/null | jq -r '.cachedValue // empty' 2>/dev/null)
+            
+            if [[ -n "$CACHED_JSON" && "$CACHED_JSON" != "null" && "$CACHED_JSON" != "empty" ]]; then
+              echo "✅ Found cached development data"
+              echo "Cached data: $CACHED_JSON"
+              
+              # Try to extract PR URLs from various possible paths in the cached data
+              PR_URLS=$(echo "$CACHED_JSON" | jq -r '.summary.pullrequest.byInstanceType.GitHub.pullRequests[]?.url // empty' 2>/dev/null)
+              
+              if [[ -z "$PR_URLS" ]]; then
+                # Try alternative path structures
+                PR_URLS=$(echo "$CACHED_JSON" | jq -r '.details[].pullRequests[]?.url // empty' 2>/dev/null)
+              fi
+              
+              if [[ -z "$PR_URLS" ]]; then
+                # Try to find any URL that looks like a GitHub PR
+                PR_URLS=$(echo "$CACHED_JSON" | grep -o 'https://github.com/[^/]*/[^/]*/pull/[0-9]*' 2>/dev/null || true)
+              fi
+            else
+              echo "❌ No valid cached JSON found"
+              
+              # Last resort: try to extract GitHub URLs directly from the development field string
+              echo "🔍 Last resort: Looking for GitHub URLs in development field..."
+              PR_URLS=$(echo "$DEV_FIELD" | grep -o 'https://github.com/[^/]*/[^/]*/pull/[0-9]*' 2>/dev/null || true)
+            fi
             
             if [[ -n "$PR_URLS" ]]; then
-              echo "✅ Found PR URLs in cached development data:"
+              echo "✅ Found PR URLs:"
               echo "$PR_URLS" | while read -r url; do
-                if [[ -n "$url" ]]; then
+                if [[ -n "$url" && "$url" != "null" ]]; then
                   # Extract repo and PR number from GitHub URL
                   REPO=$(echo "$url" | sed 's|https://github.com/||' | cut -d'/' -f1,2)
-                  echo "$REPO $url" >> prs.txt
                   echo "  $REPO - $url"
+                  echo "$REPO $url" >> prs.txt
                 fi
               done
             else
-              echo "❌ Could not extract PR information from development field"
+              echo "❌ Could not find any PR URLs in development field"
+              echo ""
+              echo "🔍 Debug: Full development field structure:"
+              echo "$DEV_FIELD" | jq '.' 2>/dev/null || echo "$DEV_FIELD"
+              echo ""
+              echo "💡 Possible solutions:"
+              echo "  1. Check if GitHub integration is properly configured in Jira"
+              echo "  2. Verify that PRs were actually linked to this Jira ticket"
+              echo "  3. Check if the development field uses a different custom field ID"
+              echo "  4. Ensure the API user has permissions to access development data"
               
-              if [[ "$DEV_HTTP_STATUS" == "400" ]]; then
-                echo "💡 This might be due to:"
-                echo "  - Development integration not properly configured"
-                echo "  - Insufficient permissions for development data"
-                echo "  - The issue ID or key format is invalid"
+              # Try to get all custom fields to see if development info is in a different field
+              echo ""
+              echo "🔍 Checking for development info in other custom fields..."
+              ALL_CUSTOM_FIELDS=$(echo "$RESPONSE_BODY" | jq -r '.fields | to_entries[] | select(.key | startswith("customfield_")) | "\(.key): \(.value)"' 2>/dev/null || true)
+              
+              if [[ -n "$ALL_CUSTOM_FIELDS" ]]; then
+                echo "Custom fields containing 'pull' or 'github' or 'development':"
+                echo "$ALL_CUSTOM_FIELDS" | grep -i -E "(pull|github|development|branch|commit)" || echo "  None found"
               fi
               
               touch prs.txt
