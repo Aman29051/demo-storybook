@@ -1,4 +1,4 @@
-name: Jira Cherry-pick Labeler
+name: Release Automation
 on:
   repository_dispatch:
     types: [jira_ready_to_cherrypick]
@@ -70,6 +70,10 @@ jobs:
           
           echo "✅ Successfully fetched Jira issue data"
           
+          # Extract the issue ID from the response
+          ISSUE_ID=$(echo "$RESPONSE_BODY" | jq -r '.id')
+          echo "🆔 Issue ID: $ISSUE_ID"
+          
           # Extract development information from customfield_10000
           DEV_FIELD=$(echo "$RESPONSE_BODY" | jq -r '.fields.customfield_10000 // empty')
           
@@ -101,9 +105,9 @@ jobs:
           echo ""
           echo "🚀 Fetching detailed PR information..."
           
-          # Use the development status API to get detailed PR information
+          # Use the development status API with the numeric issue ID
           DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
-            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=github&dataType=pullrequest")
+            "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${ISSUE_ID}&applicationType=github&dataType=pullrequest")
           
           DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
           DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
@@ -163,14 +167,35 @@ jobs:
             echo "❌ Failed to fetch development details"
             echo "Response: $DEV_RESPONSE_BODY"
             
-            if [[ "$DEV_HTTP_STATUS" == "400" ]]; then
-              echo "💡 This might be due to:"
-              echo "  - Development integration not properly configured"
-              echo "  - Insufficient permissions for development data"
-              echo "  - The ticket ID format or issue key is invalid"
-            fi
+            # Try alternative approach if the dev-status API fails
+            echo ""
+            echo "🔄 Attempting alternative approach..."
             
-            touch prs.txt
+            # Try to extract PR URLs from the development field JSON
+            PR_URLS=$(echo "$DEV_FIELD" | jq -r '.json | fromjson | .cachedValue.summary.pullrequest.byInstanceType.GitHub.pullRequests[]?.url // empty' 2>/dev/null || true)
+            
+            if [[ -n "$PR_URLS" ]]; then
+              echo "✅ Found PR URLs in cached development data:"
+              echo "$PR_URLS" | while read -r url; do
+                if [[ -n "$url" ]]; then
+                  # Extract repo and PR number from GitHub URL
+                  REPO=$(echo "$url" | sed 's|https://github.com/||' | cut -d'/' -f1,2)
+                  echo "$REPO $url" >> prs.txt
+                  echo "  $REPO - $url"
+                fi
+              done
+            else
+              echo "❌ Could not extract PR information from development field"
+              
+              if [[ "$DEV_HTTP_STATUS" == "400" ]]; then
+                echo "💡 This might be due to:"
+                echo "  - Development integration not properly configured"
+                echo "  - Insufficient permissions for development data"
+                echo "  - The issue ID or key format is invalid"
+              fi
+              
+              touch prs.txt
+            fi
           fi
           
           if [[ -s prs.txt ]]; then
