@@ -119,7 +119,7 @@ jobs:
             
             # Try with issue key first
             DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
-              "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${TICKET_KEY}&applicationType=${APP_TYPE}&dataType=pullrequest")
+              "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/details?issueIdOrKey=${TICKET_KEY}&applicationType=${APP_TYPE}&dataType=pullrequest")
             
             DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
             DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
@@ -133,7 +133,7 @@ jobs:
               # Try with numeric issue ID
               echo "🔄 Trying with issue ID for applicationType=${APP_TYPE}..."
               DEV_RESPONSE=$(curl -s -w "HTTP_STATUS:%{http_code}" -u $JIRA_EMAIL:$JIRA_API_TOKEN \
-                "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/detail?issueIdOrKey=${ISSUE_ID}&applicationType=${APP_TYPE}&dataType=pullrequest")
+                "https://$JIRA_DOMAIN.atlassian.net/rest/dev-status/1.0/issue/details?issueIdOrKey=${ISSUE_ID}&applicationType=${APP_TYPE}&dataType=pullrequest")
               
               DEV_HTTP_STATUS=$(echo "$DEV_RESPONSE" | grep -o "HTTP_STATUS:[0-9]*" | cut -d: -f2)
               DEV_RESPONSE_BODY=$(echo "$DEV_RESPONSE" | sed 's/HTTP_STATUS:[0-9]*$//')
