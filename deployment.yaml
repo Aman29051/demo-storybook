@@ -12,9 +12,9 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxUnavailable: 0          
-      maxSurge: 1               
-  revisionHistoryLimit: 5        
+      maxUnavailable: 0
+      maxSurge: 1
+  revisionHistoryLimit: 5
   selector:
     matchLabels:
       app: service-db
@@ -29,11 +29,11 @@ spec:
           image: amazonlinux:2
           env:
             - name: KAMLESH_AUTH_DUMP_FILE
-              value: "latest" 
+              value: "latest"
             - name: PRASAD_AUTH_DUMP_FILE
-              value: "latest"  
+              value: "latest"
             - name: SHREYASH_AUTH_DUMP_FILE
-              value: "latest"   
+              value: "latest"
           command: ["/bin/bash", "-c"]
           args:
             - |
@@ -111,7 +111,6 @@ spec:
             - name: dump-volume
               mountPath: /docker-entrypoint-initdb.d/01-kamlesh.sql
               subPath: dump/kamlesh.sql
-
         - name: postgres-prasad
           image: pgvector/pgvector:pg16
           env:
@@ -143,7 +142,6 @@ spec:
             - name: dump-volume
               mountPath: /docker-entrypoint-initdb.d/01-prasad.sql
               subPath: dump/prasad.sql
-
         - name: postgres-shreyash
           image: pgvector/pgvector:pg16
           env:
@@ -174,11 +172,10 @@ spec:
           volumeMounts:
             - name: dump-volume
               mountPath: /docker-entrypoint-initdb.d/01-shreyash.sql
-              subPath: dump/shreyash.sql    
+              subPath: dump/shreyash.sql
       volumes:
         - name: dump-volume
           emptyDir: {}
-
 ---
 # Horizontal Pod Autoscaler
 apiVersion: autoscaling/v2
@@ -194,34 +191,35 @@ spec:
   minReplicas: 1
   maxReplicas: 5
   metrics:
-  - type: Resource
-    resource:
-      name: cpu
-      target:
-        type: Utilization
-        averageUtilization: 70
-  - type: Resource
-    resource:
-      name: memory
-      target:
-        type: Utilization
-        averageUtilization: 80
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
   behavior:
     scaleUp:
       stabilizationWindowSeconds: 60
       policies:
-      - type: Percent
-        value: 50
-        periodSeconds: 60
-      - type: Pods
-        value: 1
-        periodSeconds: 60
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+        - type: Pods
+          value: 1
+          periodSeconds: 60
       selectPolicy: Max
     scaleDown:
       stabilizationWindowSeconds: 300
       policies:
-      - type: Percent
-        value: 10
-        periodSeconds: 60
+        - type: Percent
+          value: 10
+          periodSeconds: 60
       selectPolicy: Min
 ---
+[]
