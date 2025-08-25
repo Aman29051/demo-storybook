@@ -56,10 +56,8 @@ jobs:
       - name: Update deployment.yaml
         run: |
           yq -i '
-            (.spec.template.spec.initContainers[].env[] | select(.name == strenv(VAR_NAME)).value) = strenv(VAR_VALUE)
+          (.[] | select(has("env")) | .env[] | select(.name == strenv(VAR_NAME)).value) = strenv(VAR_VALUE)
           ' deployment.yaml
-          echo "Updated $VAR_NAME to $VAR_VALUE"
-          grep -A1 "$VAR_NAME" deployment.yaml
 
       - name: Commit, push, and create PR
         run: |
