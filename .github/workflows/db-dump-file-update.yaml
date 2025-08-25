@@ -56,11 +56,10 @@ jobs:
       - name: Update deployment.yaml
         run: |
           yq eval --inplace \
-            '(.spec.template.spec.containers[].env[] | select(.name == strenv(VAR_NAME)).value) = strenv(VAR_VALUE)' \
+            '(.spec.template.spec.initContainers[0].env[] | select(.name == strenv(VAR_NAME)).value) = strenv(VAR_VALUE)' \
             deployment.yaml
-
           echo "Updated $VAR_NAME to $VAR_VALUE"
-          yq eval ".spec.template.spec.containers[].env[] | select(.name == \"$VAR_NAME\")" deployment.yaml
+          yq eval ".spec.template.spec.initContainers[0].env[] | select(.name == \"$VAR_NAME\")" deployment.yaml
 
       - name: Commit, push, and create PR
         run: |
