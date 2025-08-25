@@ -16,7 +16,7 @@ on:
           - prasad
           - shreyash
           - kiran
-          - matt          - 
+          - matt 
       database_name:
         description: "Select Database Name"
         required: true
