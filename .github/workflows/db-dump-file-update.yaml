@@ -55,9 +55,11 @@ jobs:
 
       - name: Update deployment.yaml
         run: |
-          sed -i "s|\(name: $VAR_NAME[[:space:]]*value: \).*|\1\"$VAR_VALUE\"|" deployment.yaml
+          yq -i '
+            (.spec.template.spec.initContainers[].env[] | select(.name == strenv(VAR_NAME)).value) = strenv(VAR_VALUE)
+          ' deployment.yaml
           echo "Updated $VAR_NAME to $VAR_VALUE"
-          cat deployment.yaml | grep "$VAR_NAME" -A1
+          grep -A1 "$VAR_NAME" deployment.yaml
 
       - name: Commit, push, and create PR
         run: |
