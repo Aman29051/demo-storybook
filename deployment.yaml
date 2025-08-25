@@ -29,7 +29,7 @@ spec:
           image: amazonlinux:2
           env:
             - name: KAMLESH_AUTH_DUMP_FILE
-              value: "latest" 
+              value: "2025-08-23.sql"
             - name: PRASAD_AUTH_DUMP_FILE
               value: "latest"  
             - name: SHREYASH_AUTH_DUMP_FILE
