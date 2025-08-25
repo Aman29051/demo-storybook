@@ -55,11 +55,14 @@ jobs:
 
       - name: Update deployment.yaml
         run: |
-          yq eval --inplace \
-            '(.spec.template.spec.initContainers[0].env[] | select(.name == strenv(VAR_NAME)).value) = strenv(VAR_VALUE)' \
-            deployment.yaml
-          echo "Updated $VAR_NAME to $VAR_VALUE"
-          yq eval ".spec.template.spec.initContainers[0].env[] | select(.name == \"$VAR_NAME\")" deployment.yaml
+          if grep -q "name: $VAR_NAME" deployment.yaml; then
+            sed -i "/- name: $VAR_NAME/,/value:/ s/value: .*/value: \"$VAR_VALUE\"/" deployment.yaml
+            echo "Updated $VAR_NAME to $VAR_VALUE"
+            grep -A1 "name: $VAR_NAME" deployment.yaml
+          else
+            echo "Environment variable $VAR_NAME not found in deployment.yaml"
+            exit 1
+          fi
 
       - name: Commit, push, and create PR
         run: |
