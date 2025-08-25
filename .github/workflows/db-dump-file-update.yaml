@@ -1,0 +1,105 @@
+name: Update DB Dump File
+
+on:
+  workflow_dispatch:
+    inputs:
+      restore_date:
+        description: "Restore DB data dump date (YYYY-MM-DD)"
+        required: true
+        type: string
+      username:
+        description: "Select Username"
+        required: true
+        type: choice
+        options:
+          - kamlesh
+          - prasad
+          - shreyash
+          - kiran
+          - matt          - 
+      database_name:
+        description: "Select Database Name"
+        required: true
+        type: choice
+        options:
+          - auth
+          - case
+          - integration
+          - manual_score
+          - notification
+          - report
+          - electronic_consent
+          - warehouse
+
+jobs:
+  update-dump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v3
+
+      - name: Prepare ENV VAR
+        id: prep
+        run: |
+          USERNAME_UPPER=$(echo "${{ github.event.inputs.username }}" | tr '[:lower:]' '[:upper:]')
+          DB_UPPER=$(echo "${{ github.event.inputs.database_name }}" | tr '[:lower:]' '[:upper:]')
+          VAR_NAME="${USERNAME_UPPER}_${DB_UPPER}_DUMP_FILE"
+          VAR_VALUE="${{ github.event.inputs.restore_date }}.sql"
+
+          echo "VAR_NAME=$VAR_NAME" >> $GITHUB_ENV
+          echo "VAR_VALUE=$VAR_VALUE" >> $GITHUB_ENV
+
+      - name: Update deployment.yaml
+        run: |
+          sed -i "s|\(name: $VAR_NAME[[:space:]]*value: \).*|\1\"$VAR_VALUE\"|" deployment.yaml
+          echo "Updated $VAR_NAME to $VAR_VALUE"
+          cat deployment.yaml | grep "$VAR_NAME" -A1
+
+      - name: Commit, push, and create PR
+        run: |
+          TARGET_BRANCH="chore/update-${{ env.VAR_NAME }}"
+          echo "TARGET_BRANCH=$TARGET_BRANCH" >> $GITHUB_ENV
+
+          git config user.email "github.pat@joinworth.com"
+          git config user.name "patjoinworth"
+
+          echo "${{ secrets.PERSONAL_ACCESS_TOKEN }}" > token.txt
+          gh auth login --with-token < token.txt
+
+          git checkout -b "$TARGET_BRANCH"
+          git add deployment.yaml
+          git commit -m "chore: update $VAR_NAME to $VAR_VALUE" || echo "No changes to commit"
+          git push origin "$TARGET_BRANCH"
+
+          gh pr create \
+            --body "Automated update of \`$VAR_NAME\` in deployment.yaml to point to dump file \`$VAR_VALUE\`." \
+            --title "#NO_JIRA: #LIVE Update $VAR_NAME to $VAR_VALUE" \
+            --head "$TARGET_BRANCH" \
+            --base "main"
+
+          echo "Waiting for PR to be fully created..."
+          sleep 5
+          PR_URL=$(gh pr view --json url -q ".url")
+          echo "Pull Request created: $PR_URL"
+
+          echo "${{ secrets.PERSONAL_ACCESS_TOKEN_AUTOAPPROVEBOT }}" > token.txt
+          gh auth login --with-token < token.txt
+          
+          gh pr review --approve "$PR_URL"
+          
+          echo "Waiting for status checks to pass..."
+          if timeout 10m gh pr checks "$PR_URL" --watch; then
+            echo "All status checks passed within timeout."
+          else
+            echo "Timeout or error while waiting for status checks. Proceeding to attempt merge anyway."
+          fi
+          
+          if gh pr merge --squash "$PR_URL"; then
+            echo "PR merged successfully"
+          else
+            echo "Merge failed"
+          fi
